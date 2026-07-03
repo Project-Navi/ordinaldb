@@ -556,8 +556,7 @@ dependencies = [
 [[package]]
 name = "ordvec"
 version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "df9946ed4da7285d1124977f4671b59ae93f60f15a99b4da201a19ee647f8ca7"
+source = "git+https://github.com/Project-Navi/ordvec?branch=integration%2Ffull-stack#90f287388c992feba819488864a6af814da0b330"
 dependencies = [
  "rayon",
 ]
@@ -565,8 +564,7 @@ dependencies = [
 [[package]]
 name = "ordvec-manifest"
 version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3a89e8abe34292f4b36bd873ee93fe1a83973d66183dfc1da56b7b7aecc5c435"
+source = "git+https://github.com/Project-Navi/ordvec?branch=integration%2Ffull-stack#90f287388c992feba819488864a6af814da0b330"
 dependencies = [
  "chrono",
  "hex",
