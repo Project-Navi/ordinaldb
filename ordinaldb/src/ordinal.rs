@@ -1260,6 +1260,19 @@ fn validate_add_dim_bits(dim: usize, bits: u8) -> Result<(), AddError> {
 }
 
 fn first_invalid_coord(values: &[f32], dim: usize) -> Option<(usize, usize, f32)> {
+    // Large ingest batches paid a full serial pass here (measured ~0.1s per
+    // GiB). Happy path: a parallel all-valid sweep. Only on failure does the
+    // serial scan run, preserving exact first-offender reporting.
+    const PARALLEL_THRESHOLD: usize = 1 << 20;
+    if values.len() >= PARALLEL_THRESHOLD {
+        let all_valid = values.par_chunks(1 << 18).all(|c| {
+            c.iter()
+                .all(|v| v.is_finite() && v.abs() < MAX_INPUT_MAGNITUDE)
+        });
+        if all_valid {
+            return None;
+        }
+    }
     values.iter().enumerate().find_map(|(i, value)| {
         if !value.is_finite() || value.abs() >= MAX_INPUT_MAGNITUDE {
             Some((i / dim, i % dim, *value))
