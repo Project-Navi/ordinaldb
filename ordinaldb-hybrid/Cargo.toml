@@ -1,0 +1,24 @@
+[package]
+name = "ordinaldb-hybrid"
+version = "0.2.0"
+edition = "2021"
+rust-version = "1.89"
+description = "Sparse BM25 mmap and deterministic hybrid retrieval utilities for OrdinalDB"
+license = "MIT"
+readme = "../README.md"
+repository = "https://github.com/Project-Navi/ordinaldb"
+
+[dependencies]
+libc = "0.2"
+memmap2 = "0.9"
+ordvec-manifest = { version = "0.5.0", default-features = false }
+serde = { version = "1", features = ["derive"], optional = true }
+serde_json = { version = "1", optional = true }
+
+[dev-dependencies]
+ordvec = "0.5.0"
+tempfile = "3"
+
+[features]
+default = []
+ltr = ["dep:serde", "dep:serde_json"]

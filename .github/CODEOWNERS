@@ -1,0 +1,10 @@
+# Code owners for Project-Navi/ordinaldb.
+#
+# GitHub honors these entries only for users with write access or better.
+# Branch protection on `main` enforces review from Code Owners.
+#
+#   @Project-Navi/stewards - repository maintainer team
+#   @Fieldnote-Echo        - repository owner/admin
+#   @project-navi-bot      - write collaborator
+
+* @Project-Navi/stewards @Fieldnote-Echo @project-navi-bot

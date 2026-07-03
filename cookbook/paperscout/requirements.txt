@@ -1,0 +1,7 @@
+# The ordinaldb wheel itself is built from source (see README.md
+# Quickstart), not installed from this file.
+llama-index-core>=0.14,<0.15
+llama-index-embeddings-huggingface>=0.7,<0.8
+sentence-transformers>=5.6,<6
+requests>=2.34,<3
+defusedxml>=0.7,<0.8

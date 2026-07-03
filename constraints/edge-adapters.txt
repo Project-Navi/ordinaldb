@@ -1,0 +1,10 @@
+# Starter constraints used by edge/local adapter smoke runs.
+#
+# This is not a full transitive lockfile. Generate a complete wheelhouse or
+# frozen constraints file for production devices.
+maturin>=1.12,<2.0
+numpy>=1.20
+langchain-core>=1.4,<2
+llama-index-core>=0.14,<0.15
+haystack-ai>=2.30,<3
+agno>=2.6,<3

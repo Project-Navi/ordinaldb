@@ -1,0 +1,112 @@
+# Model-in-the-loop verification: installs a real sentence-transformers
+# model (CPU torch) and then (a) runs the same fixture-driven Rust/Python
+# real-embedding suites used in per-PR CI as a sanity check, and (b)
+# regenerates the committed fixtures with the live model and compares
+# digests to catch model/library drift. Only (b) actually embeds text
+# through sentence-transformers; the test suites in (a) consume the
+# committed fixture vectors, same as per-PR CI, never the live model.
+# Nightly + manual because model downloads are too slow for per-PR CI.
+name: nightly-real-embeddings
+
+on:
+  schedule:
+    - cron: "0 8 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  real-model-e2e:
+    name: Real-model E2E (sentence-transformers)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable (2026-03-27)
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - name: Build extension wheel
+        run: |
+          python -m venv .nightly-venv
+          .nightly-venv/bin/pip install --upgrade pip maturin
+          # rust-cache can restore a target/ dir containing wheels from an
+          # earlier run (e.g. a different Python/ABI tag); start clean so
+          # exactly one wheel matches the glob below.
+          rm -rf target/wheels
+          .nightly-venv/bin/maturin build --release -m ordinaldb-python/Cargo.toml
+      - name: Install wheel with adapters and a real embedding model (CPU torch)
+        run: |
+          .nightly-venv/bin/pip install torch --index-url https://download.pytorch.org/whl/cpu
+          WHEEL="$(.nightly-venv/bin/python - <<'PY'
+          from pathlib import Path
+          wheels = sorted(Path("target/wheels").glob("ordinaldb-*.whl"))
+          assert len(wheels) == 1, f"expected exactly one built wheel, found {wheels}"
+          print(wheels[0])
+          PY
+          )"
+          .nightly-venv/bin/pip install "${WHEEL}[adapters]" sentence-transformers
+      - name: Verify adapter extras are importable
+        # Without this, a broken/failed adapter import just makes the
+        # corresponding E2E test class SkipTest, and the job stays green
+        # having exercised none of the intended adapter integration paths.
+        run: |
+          .nightly-venv/bin/python - <<'PY'
+          import importlib
+
+          modules = [
+              "langchain_core",
+              "llama_index",
+              "haystack",
+              "agno",
+          ]
+          for module in modules:
+              importlib.import_module(module)
+          PY
+      - name: Run Python suite on committed fixtures (includes idiomatic E2E)
+        run: .nightly-venv/bin/python -m unittest discover -s ordinaldb-python/tests
+      - name: Rust real-embedding suite
+        run: cargo test -p ordinaldb --test real_embeddings --release --locked
+      - name: Regenerate fixtures with the live model
+        # Must succeed: this is a real invocation of generate.py (model
+        # download, tokenization, inference) and a crash here is an
+        # infrastructure/regression failure, not a drift signal. It was
+        # previously bundled into the continue-on-error comparison step
+        # below, which meant a generate.py crash was masked exactly like
+        # intentional digest drift.
+        run: |
+          cp tests/fixtures/real_embeddings/manifest.json /tmp/manifest.committed.json
+          .nightly-venv/bin/python tests/fixtures/real_embeddings/generate.py
+      - name: Fixture drift check (compare digests; informational only)
+        # A digest change means the model/library versions now produce
+        # different bit-patterns than the committed fixtures. That is a
+        # signal to review and possibly regenerate fixtures, not a failure
+        # of OrdinalDB itself, so this step reports via a workflow warning
+        # annotation and always exits 0.
+        run: |
+          .nightly-venv/bin/python - <<'EOF'
+          import json
+
+          committed = json.load(open("/tmp/manifest.committed.json"))["sha256"]
+          fresh = json.load(open("tests/fixtures/real_embeddings/manifest.json"))["sha256"]
+          if committed == fresh:
+              print("fixtures stable: live model reproduces committed digests")
+          else:
+              message = (
+                  f"FIXTURE DRIFT DETECTED: committed={committed} fresh={fresh}"
+              )
+              print(message)
+              print(f"::warning::{message}")
+          EOF
+      - name: Restore committed fixtures after drift check
+        if: always()
+        run: git checkout -- tests/fixtures/real_embeddings/ || true

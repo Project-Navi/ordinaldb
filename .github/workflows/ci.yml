@@ -1,0 +1,363 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  lint:
+    name: lint (fmt + clippy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable (2026-03-27)
+        with:
+          toolchain: stable
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - name: cargo fmt --check
+        run: cargo fmt --all --check
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: cargo clippy ordinaldb hybrid API
+        run: cargo clippy -p ordinaldb --all-targets --features hybrid --locked -- -D warnings
+
+  rust:
+    name: Rust (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-14, windows-latest]
+    steps:
+      - uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable (2026-03-27)
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - name: Rust host details
+        run: rustc -vV
+      - name: ordinaldb test suite
+        run: cargo test --workspace --exclude ordinaldb-python --release --locked
+      - name: ordinaldb hybrid API tests
+        run: cargo test -p ordinaldb --features hybrid --release --locked
+      - name: Downstream consumer smoke test
+        run: cargo run --release --manifest-path examples/downstream-smoke/Cargo.toml --locked
+
+  rust-arm64:
+    name: Rust (linux-arm64)
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable (2026-03-27)
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - name: Rust host details
+        run: rustc -vV
+      - name: ordinaldb test suite
+        run: cargo test --workspace --exclude ordinaldb-python --release --locked
+      - name: ordinaldb hybrid API tests
+        run: cargo test -p ordinaldb --features hybrid --release --locked
+      - name: Downstream consumer smoke test
+        run: cargo run --release --manifest-path examples/downstream-smoke/Cargo.toml --locked
+
+  rust-pi-runtime:
+    name: Rust Pi runtime (linux-arm64)
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable (2026-03-27)
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - name: Pi-style ARM64 profiling smoke
+        run: bash scripts/pi_arm64_profile.sh
+
+  ltr-features:
+    name: LTR feature combos (hybrid/ltr, experimental-ltr)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable (2026-03-27)
+        with:
+          toolchain: stable
+          components: clippy
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - name: cargo clippy ordinaldb-hybrid ltr feature
+        run: cargo clippy -p ordinaldb-hybrid --all-targets --features ltr --locked -- -D warnings
+      - name: cargo clippy ordinaldb experimental-ltr feature
+        run: cargo clippy -p ordinaldb --all-targets --features experimental-ltr --locked -- -D warnings
+      - name: cargo clippy ordinaldb-cli experimental-ltr-local-train feature
+        run: cargo clippy -p ordinaldb-cli --all-targets --features experimental-ltr-local-train --locked -- -D warnings
+      - name: ordinaldb-hybrid ltr feature tests
+        run: cargo test -p ordinaldb-hybrid --features ltr --release --locked
+      - name: ordinaldb-ltr crate tests
+        run: cargo test -p ordinaldb-ltr --release --locked
+      - name: ordinaldb experimental-ltr combo tests
+        run: cargo test -p ordinaldb --features experimental-ltr --release --locked
+      - name: ordinaldb-cli experimental-ltr-local-train combo tests
+        run: cargo test -p ordinaldb-cli --features experimental-ltr-local-train --release --locked
+
+  python:
+    name: Python (${{ matrix.os }}, py${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-14, windows-latest]
+        python-version: ["3.9", "3.11", "3.14"]
+    steps:
+      - uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: ${{ matrix.python-version }}
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable (2026-03-27)
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - name: Install maturin
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install maturin
+      - name: Build ordinaldb wheel
+        working-directory: ordinaldb-python
+        run: maturin build --release --out dist
+      - name: Install wheel
+        working-directory: ordinaldb-python
+        run: python -m pip install dist/*.whl
+      - name: Import installed wheel
+        working-directory: ordinaldb-python
+        run: python -c "import ordinaldb; import ordinaldb.adapters"
+      - name: Python test suite
+        working-directory: ordinaldb-python
+        run: python -m unittest discover -s tests
+
+  python-required-checks:
+    name: Python (${{ matrix.os }})
+    runs-on: ubuntu-latest
+    needs: python
+    if: ${{ always() }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-14, windows-latest]
+    steps:
+      - name: Require full Python matrix success
+        run: test "${{ needs.python.result }}" = "success"
+
+  python-adapters:
+    name: Python adapters (all extras)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.11"
+      - name: Install maturin
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install maturin
+      - name: Build ordinaldb wheel
+        working-directory: ordinaldb-python
+        run: maturin build --release --out dist
+      - name: Build adapter wheelhouse
+        working-directory: ordinaldb-python
+        run: |
+          WHEEL="$(python - <<'PY'
+          from pathlib import Path
+          print(sorted(Path("dist").glob("*.whl"))[0])
+          PY
+          )"
+          python -m pip wheel --wheel-dir ../.adapter-wheelhouse \
+            -c ../constraints/edge-adapters.txt "${WHEEL}[adapters]"
+      - name: Install wheel with all adapter extras from wheelhouse
+        working-directory: ordinaldb-python
+        run: |
+          WHEEL="$(python - <<'PY'
+          from pathlib import Path
+          print(sorted(Path("dist").glob("*.whl"))[0])
+          PY
+          )"
+          python -m venv ../.adapter-offline-venv
+          ../.adapter-offline-venv/bin/python -m pip install --upgrade pip
+          ../.adapter-offline-venv/bin/python -m pip install --no-index \
+            --find-links ../.adapter-wheelhouse \
+            -c ../constraints/edge-adapters.txt "${WHEEL}[adapters]"
+      - name: Verify adapter extras are importable
+        working-directory: ordinaldb-python
+        run: |
+          ../.adapter-offline-venv/bin/python - <<'PY'
+          import importlib
+
+          modules = [
+              "langchain_core",
+              "llama_index",
+              "haystack",
+              "agno",
+          ]
+          for module in modules:
+              importlib.import_module(module)
+          PY
+      - name: Python adapter test suite
+        working-directory: ordinaldb-python
+        run: ../.adapter-offline-venv/bin/python -m unittest discover -s tests
+      - name: Python adapter edge examples
+        run: |
+          .adapter-offline-venv/bin/python examples/python_adapters/langchain_edge_smoke.py
+          .adapter-offline-venv/bin/python examples/python_adapters/llama_index_edge_smoke.py
+          HAYSTACK_TELEMETRY_ENABLED=False HAYSTACK_DISABLE_TELEMETRY=1 POSTHOG_DISABLED=1 \
+            .adapter-offline-venv/bin/python examples/python_adapters/haystack_edge_smoke.py
+          AGNO_TELEMETRY=false \
+            .adapter-offline-venv/bin/python examples/python_adapters/agno_edge_smoke.py
+      - name: Python adapter blocked-egress smoke
+        run: .adapter-offline-venv/bin/python examples/python_adapters/blocked_egress_smoke.py
+
+  python-arm64:
+    name: Python (linux-arm64)
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.11"
+      - name: Install maturin
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install maturin
+      - name: Build ordinaldb wheel
+        working-directory: ordinaldb-python
+        run: maturin build --release --out dist
+      - name: Install wheel
+        working-directory: ordinaldb-python
+        run: python -m pip install dist/*.whl
+      - name: Python test suite
+        working-directory: ordinaldb-python
+        run: python -m unittest discover -s tests
+
+  python-sdist:
+    name: Python sdist
+    runs-on: ubuntu-latest
+    steps:
+      - uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.11"
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable (2026-03-27)
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - name: Install maturin
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install maturin
+      - name: Build ordinaldb sdist
+        working-directory: ordinaldb-python
+        run: maturin sdist --out dist
+      - name: Install sdist in isolated environment
+        working-directory: ordinaldb-python
+        run: |
+          python -m venv ../.sdist-install-venv
+          ../.sdist-install-venv/bin/python -m pip install --upgrade pip
+          ../.sdist-install-venv/bin/python -m pip install dist/*.tar.gz
+      - name: Import installed sdist
+        working-directory: ordinaldb-python
+        run: ../.sdist-install-venv/bin/python -c "import ordinaldb; import ordinaldb.adapters"
+      - name: Test installed sdist
+        run: |
+          cd "${RUNNER_TEMP:-/tmp}"
+          "$GITHUB_WORKSPACE/.sdist-install-venv/bin/python" \
+            -m unittest discover -s "$GITHUB_WORKSPACE/ordinaldb-python/tests"
+      - name: Hostile input smoke
+        run: |
+          cd "${RUNNER_TEMP:-/tmp}"
+          "$GITHUB_WORKSPACE/.sdist-install-venv/bin/python" "$GITHUB_WORKSPACE/scripts/hostile_input_smoke.py"
+
+  dependency-policy:
+    name: dependency policy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+      - uses: EmbarkStudios/cargo-deny-action@bb137d7af7e4fb67e5f82a49c4fce4fad40782fe # v2.0.20
+        with:
+          command: check advisories bans licenses sources
+
+  release-guard:
+    name: release guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+      - name: release publish invariants
+        run: bash tests/release_publish_invariants.sh

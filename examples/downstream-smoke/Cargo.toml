@@ -1,0 +1,13 @@
+[package]
+name = "downstream-smoke"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# Standalone crate (NOT a workspace member) that depends on ordinaldb via
+# a path dependency. This exercises the same code path a downstream cargo
+# user hits when they add ordinaldb and write their first program.
+#
+# Run from this directory: `cargo run --release`.
+[dependencies]
+ordinaldb = { path = "../../ordinaldb", features = ["hybrid"] }

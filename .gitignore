@@ -1,0 +1,17 @@
+__pycache__/
+.cache/
+.claude/
+.venv/
+.adapter-wheelhouse/
+.adapter-offline-venv/
+*.pyc
+*.bak
+*.so
+*.dSYM/
+*.npy
+*.cdx.json
+target/
+**/target/
+.ordinaldb-benchmark-cache/
+benchmark-results/
+.serena/

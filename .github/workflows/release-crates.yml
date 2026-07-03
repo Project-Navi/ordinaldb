@@ -1,0 +1,86 @@
+name: Release (crates.io)
+
+on:
+  push:
+    tags:
+      - "ordinaldb-v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-crates
+  cancel-in-progress: false
+
+jobs:
+  guard:
+    name: gate on an ordinaldb-v SemVer tag
+    runs-on: ubuntu-latest
+    outputs:
+      ok: ${{ steps.semver.outputs.ok }}
+    steps:
+      - uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        with:
+          egress-policy: audit
+      - name: Enforce strict SemVer
+        id: semver
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          semver='^ordinaldb-v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-rc\.[1-9][0-9]*)?$'
+          if [[ "$TAG_NAME" =~ $semver ]]; then
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::$TAG_NAME is not an ordinaldb-vMAJOR.MINOR.PATCH[-rc.N] tag; skipping release."
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  package:
+    name: package independently verifiable Rust crates
+    needs: guard
+    if: needs.guard.outputs.ok == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable (2026-03-27)
+        with:
+          toolchain: stable
+      - name: Install local registry helper
+        run: cargo install cargo-local-registry --version 0.2.12 --locked
+      - name: cargo package and downstream-check staged local registry
+        run: |
+          scripts/release_crate_package_smoke.sh
+      - name: Upload .crate
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ordinaldb-rust-crates
+          path: target/package/*.crate
+          if-no-files-found: error
+
+  arm64-smoke:
+    name: release crate smoke (linux-arm64)
+    needs: guard
+    if: needs.guard.outputs.ok == 'true'
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable (2026-03-27)
+        with:
+          toolchain: stable
+      - name: Rust host details
+        run: rustc -vV
+      - name: ordinaldb Rust tests
+        run: cargo test --workspace --exclude ordinaldb-python --release --locked
+      - name: Downstream consumer smoke test
+        run: cargo run --release --manifest-path examples/downstream-smoke/Cargo.toml

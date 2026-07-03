@@ -1,0 +1,195 @@
+name: Release (PyPI)
+
+on:
+  push:
+    tags:
+      - "ordinaldb-py-v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-pypi
+  cancel-in-progress: false
+
+jobs:
+  guard:
+    name: gate on an ordinaldb-py-v release tag
+    runs-on: ubuntu-latest
+    outputs:
+      ok: ${{ steps.semver.outputs.ok }}
+    steps:
+      - uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        with:
+          egress-policy: audit
+      - name: Enforce strict ordinaldb-py-v release tag
+        id: semver
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          release_tag='^ordinaldb-py-v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(rc[1-9][0-9]*)?$'
+          if [[ "$TAG_NAME" =~ $release_tag ]]; then
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::$TAG_NAME is not an ordinaldb-py-vMAJOR.MINOR.PATCH[rcN] tag; skipping release."
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  linux:
+    name: Linux ${{ matrix.target }}
+    needs: guard
+    if: needs.guard.outputs.ok == 'true'
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64
+            runner: ubuntu-latest
+          - target: aarch64
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.11"
+      - name: Build wheels
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
+        with:
+          target: ${{ matrix.target }}
+          manylinux: manylinux_2_28
+          args: --release --locked --out dist
+          working-directory: ordinaldb-python
+      - name: Install wheel
+        working-directory: ordinaldb-python
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install dist/*.whl
+      - name: Import installed wheel
+        working-directory: ordinaldb-python
+        run: python -c "import ordinaldb; import ordinaldb.adapters"
+      - name: Upload wheels
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: wheels-linux-${{ matrix.target }}
+          path: ordinaldb-python/dist
+
+  macos:
+    name: macOS aarch64
+    needs: guard
+    if: needs.guard.outputs.ok == 'true'
+    runs-on: macos-14
+    steps:
+      - uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.11"
+      - name: Build wheels
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
+        with:
+          target: aarch64
+          args: --release --locked --out dist
+          working-directory: ordinaldb-python
+      - name: Install wheel
+        working-directory: ordinaldb-python
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install dist/*.whl
+      - name: Import installed wheel
+        working-directory: ordinaldb-python
+        run: python -c "import ordinaldb; import ordinaldb.adapters"
+      - name: Upload wheels
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: wheels-macos-aarch64
+          path: ordinaldb-python/dist
+
+  windows:
+    name: Windows x64
+    needs: guard
+    if: needs.guard.outputs.ok == 'true'
+    runs-on: windows-latest
+    steps:
+      - uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.11"
+      - name: Build wheels
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
+        with:
+          target: x64
+          args: --release --locked --out dist
+          working-directory: ordinaldb-python
+      - name: Install wheel
+        working-directory: ordinaldb-python
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install dist/*.whl
+      - name: Import installed wheel
+        working-directory: ordinaldb-python
+        run: python -c "import ordinaldb; import ordinaldb.adapters"
+      - name: Upload wheels
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: wheels-windows-x64
+          path: ordinaldb-python/dist
+
+  sdist:
+    name: sdist
+    needs: guard
+    if: needs.guard.outputs.ok == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.11"
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable (2026-03-27)
+        with:
+          toolchain: stable
+      - name: Build sdist
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
+        with:
+          command: sdist
+          args: --out dist
+          working-directory: ordinaldb-python
+      - name: Install sdist in isolated environment
+        working-directory: ordinaldb-python
+        run: |
+          python -m venv ../.sdist-install-venv
+          ../.sdist-install-venv/bin/python -m pip install --upgrade pip
+          ../.sdist-install-venv/bin/python -m pip install dist/*.tar.gz
+      - name: Import installed sdist
+        working-directory: ordinaldb-python
+        run: ../.sdist-install-venv/bin/python -c "import ordinaldb; import ordinaldb.adapters"
+      - name: Test installed sdist
+        run: |
+          cd "${RUNNER_TEMP:-/tmp}"
+          "$GITHUB_WORKSPACE/.sdist-install-venv/bin/python" \
+            -m unittest discover -s "$GITHUB_WORKSPACE/ordinaldb-python/tests"
+      - name: Upload sdist
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sdist
+          path: ordinaldb-python/dist

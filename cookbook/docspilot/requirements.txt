@@ -1,0 +1,6 @@
+# The ordinaldb wheel itself is built from source (see README.md "Setup"),
+# not installed from this file.
+langchain>=1.3,<2
+langchain-core>=1.4,<2
+langchain-text-splitters>=1.1,<2
+sentence-transformers>=5.6,<6

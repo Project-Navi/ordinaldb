@@ -1,0 +1,20 @@
+{
+ "model": "sentence-transformers/all-MiniLM-L6-v2",
+ "model_revision": "1110a243fdf4706b3f48f1d95db1a4f5529b4d41",
+ "dim": 384,
+ "dtype": "float32 little-endian, row-major",
+ "documents": 32,
+ "queries": 8,
+ "generator_versions": {
+  "python": "3.12.12",
+  "sentence_transformers": "5.6.0",
+  "torch": "2.12.1+cu130",
+  "numpy": "2.5.0"
+ },
+ "sha256": {
+  "minilm_docs_f32.bin": "03a0f72aa929ae0420da6ea6835a51fddaaea712d731ad94b7f2a8ee2065bc12",
+  "minilm_queries_f32.bin": "8229e28c5ccc4a24e3be9e5886c06b265c53b9d339cdda7086673e19d57425fc",
+  "texts.json": "d90ef9a644300f24a8e1dae89765fc8e84f62eb9bde7ffae79c3ce93c9dd3017",
+  "adversarial_floats.json": "f4880a0591008f4d9ea585a0a07cf1976d5b655867a35293dee2a29e2bdc99bd"
+ }
+}

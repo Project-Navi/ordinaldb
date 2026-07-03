@@ -1,0 +1,26 @@
+[package]
+name = "supportsearch"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# Standalone crate (NOT a workspace member) that depends on ordinaldb via a
+# path dependency, mirroring examples/downstream-smoke's convention: this
+# exercises the same code path a real downstream `cargo add ordinaldb`
+# consumer hits, with its own Cargo.lock and no inherited workspace
+# settings. The empty [workspace] table below stops Cargo's upward search
+# from folding this crate into the repo-root workspace.
+[workspace]
+
+[features]
+default = []
+# Mirrors ordinaldb's own `experimental-ltr` feature name/scope: unlocks the
+# LTR reranking types under `ordinaldb::hybrid` (inference-only; see
+# README.md for where the offline training/feature-cache half lives).
+experimental-ltr = ["ordinaldb/experimental-ltr"]
+
+[dependencies]
+ordinaldb = { path = "../../ordinaldb", features = ["hybrid"] }
+fastembed = "4"
+anyhow = "1"
+serde_json = "1"

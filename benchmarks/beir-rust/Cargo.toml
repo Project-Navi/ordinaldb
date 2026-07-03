@@ -1,0 +1,29 @@
+[package]
+name = "ordinaldb-beir-benchmark"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.89"
+publish = false
+
+[[bin]]
+name = "ordinaldb-beir-benchmark"
+path = "src/main.rs"
+
+[features]
+default = ["cuda"]
+cuda = ["llama-cpp-2/cuda"]
+turbovec-compare = ["dep:turbovec"]
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4.5", features = ["derive"] }
+llama-cpp-2 = "0.1.146"
+md5 = "0.7"
+ordinaldb = { path = "../../ordinaldb" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+tempfile = "3"
+turbovec = { git = "https://github.com/RyanCodrai/turbovec.git", rev = "1e7200cfd8f26c92ce2855652db64bc7f85bc039", package = "turbovec", optional = true }
+ureq = "2"
+zip = { version = "2", default-features = false, features = ["deflate"] }

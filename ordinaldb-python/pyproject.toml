@@ -1,0 +1,75 @@
+[build-system]
+requires = ["maturin>=1.12,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "ordinaldb"
+version = "0.2.0"
+description = "Local-first vector indexing powered by OrdVec ordinal quantization"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [
+    { name = "OrdinalDB contributors" },
+]
+keywords = [
+    "vector-search",
+    "ordinal",
+    "nearest-neighbor",
+    "ann",
+    "rag",
+    "embeddings",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Rust",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Database",
+]
+
+dependencies = [
+    "numpy>=1.20",
+]
+
+[project.optional-dependencies]
+langchain = [
+    "langchain-core>=1.4,<2; python_version >= '3.10'",
+]
+llama-index = [
+    "llama-index-core>=0.14,<0.15; python_version >= '3.10'",
+]
+haystack = [
+    "haystack-ai>=2.30,<3; python_version >= '3.10'",
+]
+agno = [
+    "agno>=2.6,<3; python_version >= '3.10'",
+]
+adapters = [
+    "langchain-core>=1.4,<2; python_version >= '3.10'",
+    "llama-index-core>=0.14,<0.15; python_version >= '3.10'",
+    "haystack-ai>=2.30,<3; python_version >= '3.10'",
+    "agno>=2.6,<3; python_version >= '3.10'",
+]
+
+[project.urls]
+Homepage = "https://github.com/Project-Navi/ordinaldb"
+Repository = "https://github.com/Project-Navi/ordinaldb"
+Issues = "https://github.com/Project-Navi/ordinaldb/issues"
+
+[tool.maturin]
+manifest-path = "Cargo.toml"
+features = ["pyo3/extension-module"]
+python-source = "python"
+module-name = "ordinaldb._ordinaldb"

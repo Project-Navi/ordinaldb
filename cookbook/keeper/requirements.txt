@@ -1,0 +1,4 @@
+# The ordinaldb wheel itself is built from source (see README.md "Setup"),
+# not installed from this file.
+agno>=2.6,<3
+sentence-transformers>=5.6,<6
