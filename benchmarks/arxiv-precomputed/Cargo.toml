@@ -1,0 +1,27 @@
+[package]
+name = "ordinaldb-arxiv-precomputed-benchmark"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.89"
+publish = false
+
+[[bin]]
+name = "ordinaldb-arxiv-precomputed-benchmark"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4.5", features = ["derive"] }
+ordinaldb = { path = "../../ordinaldb" }
+
+# Match the profile the published numbers were measured with (plain
+# opt-level 3, no LTO) rather than the workspace release profile.
+[profile.release]
+opt-level = 3
+debug = false
+
+# Pre-publish only: mirror the workspace root's pin to the ordvec perf-train
+# integration heads. Removed at the ordvec 0.6.0 publish, restoring crates.io
+# version resolution.
+[patch.crates-io]
+ordvec = { git = "https://github.com/Project-Navi/ordvec", branch = "integration/full-stack" }
+ordvec-manifest = { git = "https://github.com/Project-Navi/ordvec", branch = "integration/full-stack" }

@@ -10,7 +10,11 @@ members = [
 # Deliberately kept out of the workspace: these crates need to behave like
 # genuine external consumers of the published `ordinaldb` crate, with their
 # own lockfiles and none of the workspace's inherited settings.
-exclude = ["examples/downstream-smoke", "benchmarks/beir-rust"]
+exclude = [
+    "examples/downstream-smoke",
+    "benchmarks/beir-rust",
+    "benchmarks/arxiv-precomputed",
+]
 resolver = "2"
 
 [profile.release]
