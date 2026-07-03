@@ -1515,8 +1515,18 @@ fn two_stage_query_chunk_rows(n_vectors: usize, nq: usize) -> usize {
     if n_vectors == 0 || nq == 0 {
         return 1;
     }
-    let rows = TWO_STAGE_MAX_SCORE_CELLS / n_vectors;
-    rows.clamp(1, nq)
+    // Two forces size a chunk: the CSR memory cap (score cells) bounds it
+    // above, and parallel engagement bounds it below-ish — a batch must
+    // split across the rayon pool instead of landing in one chunk on one
+    // core (any batch <= cells/M previously did exactly that). TILE_FLOOR
+    // keeps each chunk's candidate scan shared across enough queries that
+    // splitting never costs more corpus passes than the cores can absorb.
+    const TILE_FLOOR: usize = 32;
+    let max_rows_by_cells = (TWO_STAGE_MAX_SCORE_CELLS / n_vectors).max(1);
+    let target_rows = nq
+        .div_ceil(rayon::current_num_threads().max(1))
+        .max(TILE_FLOOR);
+    max_rows_by_cells.min(target_rows).clamp(1, nq)
 }
 
 fn swap_remove_vector(vectors: &mut Vec<f32>, dim: usize, idx: usize, len: usize) {
@@ -1672,4 +1682,63 @@ pub(crate) fn load_verified_ordinal_parts(
 ) -> Result<(RankQuant, Option<SignBitmap>, Option<PathBuf>), DenseError> {
     let loaded = load_verified_bundle(manifest_path, verify_options, load_options)?;
     Ok((loaded.rankquant, loaded.sign, loaded.ids_path))
+}
+
+#[cfg(test)]
+mod chunk_scheduler_tests {
+    use super::{two_stage_query_chunk_rows, TWO_STAGE_MAX_SCORE_CELLS};
+
+    fn in_pool<T: Send>(threads: usize, f: impl FnOnce() -> T + Send) -> T {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .build()
+            .expect("test pool")
+            .install(f)
+    }
+
+    /// A realistic batch (nq=2048, M=320) must split across the pool
+    /// instead of landing in one chunk on one core — the measured cliff
+    /// this scheduler replaces.
+    #[test]
+    fn realistic_batch_engages_the_pool() {
+        let chunk = in_pool(8, || two_stage_query_chunk_rows(320, 2048));
+        assert_eq!(chunk, 256); // ceil(2048/8), floor and cells cap inactive
+        assert!(2048usize.div_ceil(chunk) >= 8, "all 8 workers get a chunk");
+    }
+
+    /// The CSR memory cap still wins for huge candidate pools.
+    #[test]
+    fn memory_cap_wins_for_huge_candidate_pools() {
+        let chunk = in_pool(8, || two_stage_query_chunk_rows(500_000, 2048));
+        assert_eq!(chunk, (TWO_STAGE_MAX_SCORE_CELLS / 500_000).max(1));
+    }
+
+    /// Tiny batches stay in one chunk: scan-sharing beats parallel
+    /// corpus passes below the tile floor.
+    #[test]
+    fn tiny_batch_stays_single_chunk() {
+        let chunk = in_pool(8, || two_stage_query_chunk_rows(320, 8));
+        assert_eq!(chunk, 8);
+    }
+
+    /// The tile floor bounds splitting: even a huge pool never shrinks
+    /// chunks below TILE_FLOOR queries of shared scanning.
+    #[test]
+    fn tile_floor_bounds_splitting() {
+        let chunk = in_pool(64, || two_stage_query_chunk_rows(320, 512));
+        assert_eq!(chunk, 32);
+    }
+
+    /// Single-threaded pools reproduce the legacy cells-cap behavior.
+    #[test]
+    fn single_thread_keeps_legacy_chunking() {
+        let chunk = in_pool(1, || two_stage_query_chunk_rows(320, 4096));
+        assert_eq!(chunk, TWO_STAGE_MAX_SCORE_CELLS / 320);
+    }
+
+    #[test]
+    fn degenerate_inputs_return_one() {
+        assert_eq!(two_stage_query_chunk_rows(0, 100), 1);
+        assert_eq!(two_stage_query_chunk_rows(100, 0), 1);
+    }
 }
