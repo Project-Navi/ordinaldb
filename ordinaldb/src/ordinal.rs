@@ -1500,7 +1500,12 @@ fn two_stage_query_chunk_rows(n_vectors: usize, nq: usize) -> usize {
     // core (any batch <= cells/M previously did exactly that). TILE_FLOOR
     // keeps each chunk's candidate scan shared across enough queries that
     // splitting never costs more corpus passes than the cores can absorb.
-    const TILE_FLOOR: usize = 32;
+    // 128, not 32: each chunk's candidate scan streams the full sign
+    // sidecar once, so queries-per-stream sets the DRAM demand. At 32 the
+    // aggregate stream rate ceilings batch throughput (~8.6k q/s at 1.26M x
+    // 1024, measured); 128 quarters the traffic and hands the limit to the
+    // per-core compute ceiling.
+    const TILE_FLOOR: usize = 128;
     let max_rows_by_cells = (TWO_STAGE_MAX_SCORE_CELLS / n_vectors).max(1);
     let target_rows = nq
         .div_ceil(rayon::current_num_threads().max(1))
@@ -1695,7 +1700,7 @@ mod chunk_scheduler_tests {
     #[test]
     fn tile_floor_bounds_splitting() {
         let chunk = in_pool(64, || two_stage_query_chunk_rows(320, 512));
-        assert_eq!(chunk, 32);
+        assert_eq!(chunk, 128);
     }
 
     /// Single-threaded pools reproduce the legacy cells-cap behavior.
