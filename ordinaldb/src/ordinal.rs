@@ -44,8 +44,6 @@ pub struct OrdinalIndex {
     inner: Option<RankQuant>,
     sign: Option<SignBitmap>,
     sign_enabled: bool,
-    vectors: Vec<f32>,
-    raw_vectors_complete: bool,
 }
 
 /// Options controlling how a new index is built.
@@ -342,8 +340,6 @@ impl OrdinalIndex {
             inner: Some(RankQuant::new(dim, bits)),
             sign: maybe_new_sign(dim, bits, options.sign),
             sign_enabled: options.sign,
-            vectors: Vec::new(),
-            raw_vectors_complete: true,
         })
     }
 
@@ -363,8 +359,6 @@ impl OrdinalIndex {
             inner: None,
             sign: None,
             sign_enabled: true,
-            vectors: Vec::new(),
-            raw_vectors_complete: true,
         })
     }
 
@@ -435,9 +429,6 @@ impl OrdinalIndex {
         if let Some(sign) = &mut self.sign {
             sign.add(vectors);
         }
-        if self.raw_vectors_complete {
-            self.vectors.extend_from_slice(vectors);
-        }
     }
 
     /// Append row-major vectors, checking (and, for a lazy index,
@@ -494,9 +485,6 @@ impl OrdinalIndex {
             .add(vectors);
         if let Some(sign) = &mut self.sign {
             sign.add(vectors);
-        }
-        if self.raw_vectors_complete {
-            self.vectors.extend_from_slice(vectors);
         }
         Ok(())
     }
@@ -1036,22 +1024,17 @@ impl OrdinalIndex {
     /// Panics if the index is still lazy (no `dim` established) — there is
     /// nothing to remove.
     pub fn swap_remove(&mut self, idx: usize) -> usize {
-        let dim = self
-            .dim
-            .expect("cannot remove from a lazy uncommitted OrdinalIndex");
-        let len = self.len();
+        assert!(
+            self.dim.is_some(),
+            "cannot remove from a lazy uncommitted OrdinalIndex"
+        );
         let moved_from = self
             .inner
             .as_mut()
             .expect("cannot remove from a lazy uncommitted OrdinalIndex")
             .swap_remove(idx);
-        if self.raw_vectors_complete {
-            swap_remove_vector(&mut self.vectors, dim, idx, len);
-            self.rebuild_sign();
-        } else if let Some(sign) = &mut self.sign {
+        if let Some(sign) = &mut self.sign {
             sign.swap_remove(idx);
-        } else {
-            self.vectors.clear();
         }
         moved_from
     }
@@ -1199,8 +1182,6 @@ impl OrdinalIndex {
             inner: Some(rankquant),
             sign,
             sign_enabled: true,
-            vectors: Vec::new(),
-            raw_vectors_complete: false,
         })
     }
 
@@ -1214,21 +1195,6 @@ impl OrdinalIndex {
             has_sign: self.sign.is_some(),
             has_ids,
         }
-    }
-
-    fn rebuild_sign(&mut self) {
-        let Some(dim) = self.dim else {
-            self.sign = None;
-            return;
-        };
-        let Some(mut sign) = maybe_new_sign(dim, self.bits, self.sign_enabled) else {
-            self.sign = None;
-            return;
-        };
-        if !self.vectors.is_empty() {
-            sign.add(&self.vectors);
-        }
-        self.sign = Some(sign);
     }
 }
 
@@ -1527,16 +1493,6 @@ fn two_stage_query_chunk_rows(n_vectors: usize, nq: usize) -> usize {
         .div_ceil(rayon::current_num_threads().max(1))
         .max(TILE_FLOOR);
     max_rows_by_cells.min(target_rows).clamp(1, nq)
-}
-
-fn swap_remove_vector(vectors: &mut Vec<f32>, dim: usize, idx: usize, len: usize) {
-    let last = len - 1;
-    if idx != last {
-        let src = last * dim;
-        let dst = idx * dim;
-        vectors.copy_within(src..src + dim, dst);
-    }
-    vectors.truncate(last * dim);
 }
 
 struct LoadedVerifiedBundle {
