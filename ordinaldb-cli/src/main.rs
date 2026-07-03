@@ -127,7 +127,11 @@ enum LtrCommand {
         out: PathBuf,
         #[arg(long, default_value_t = 100)]
         top_k: usize,
-        #[arg(long, default_value_t = 2 * 1024 * 1024 * 1024u64)]
+        #[arg(
+            long,
+            env = "ORDINALDB_MAX_AUXILIARY_ARTIFACT_BYTES",
+            default_value_t = 2 * 1024 * 1024 * 1024u64
+        )]
         max_auxiliary_artifact_bytes: u64,
         #[arg(long)]
         json: bool,
@@ -2600,6 +2604,53 @@ mod tests {
     fn write_json(path: &Path, value: &Value) {
         let bytes = serde_json::to_vec(value).expect("serialize fixture");
         std::fs::write(path, bytes).expect("write fixture");
+    }
+
+    /// Flag > env > default precedence for the LTR auxiliary size ceiling.
+    /// A single test owns the env var end to end so parallel tests never
+    /// race on process-global environment state.
+    #[test]
+    fn ltr_features_auxiliary_bytes_flag_env_default_precedence() {
+        const ENV_VAR: &str = "ORDINALDB_MAX_AUXILIARY_ARTIFACT_BYTES";
+        const BASE_ARGS: [&str; 11] = [
+            "ordinaldb",
+            "ltr",
+            "features",
+            "--bundle",
+            "bundle",
+            "--queries",
+            "queries.jsonl",
+            "--qrels",
+            "qrels.tsv",
+            "--out",
+            "features",
+        ];
+
+        fn parse_limit(args: &[&str]) -> u64 {
+            let cli = Cli::try_parse_from(args).expect("args must parse");
+            match cli.command {
+                Command::Ltr {
+                    command:
+                        LtrCommand::Features {
+                            max_auxiliary_artifact_bytes,
+                            ..
+                        },
+                } => max_auxiliary_artifact_bytes,
+                _ => panic!("expected ltr features command"),
+            }
+        }
+
+        std::env::remove_var(ENV_VAR);
+        assert_eq!(parse_limit(&BASE_ARGS), 2 * 1024 * 1024 * 1024);
+
+        std::env::set_var(ENV_VAR, "1234");
+        assert_eq!(parse_limit(&BASE_ARGS), 1234);
+
+        let mut flag_args = BASE_ARGS.to_vec();
+        flag_args.extend(["--max-auxiliary-artifact-bytes", "42"]);
+        assert_eq!(parse_limit(&flag_args), 42);
+
+        std::env::remove_var(ENV_VAR);
     }
 
     fn write_payload_exports(path: &Path, payloads: &LegacyPayloads) {
