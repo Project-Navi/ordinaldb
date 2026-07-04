@@ -26,7 +26,8 @@ comparisons.
 Measured on the `benchmarks/arxiv-precomputed` harness (AMD Ryzen 9 9950X,
 local Linux x86_64, single process, core `OrdinalIndex` only — no adapter).
 "v0.2.0" is the published release; "perf train" is the pre-0.3 integration
-heads (ordinaldb perf branches on ordvec `integration/full-stack`).
+heads (ordinaldb perf branches on ordvec `integration/full-stack` at commit
+`522bade`; later integration commits are security-only and perf-neutral).
 
 | Metric | v0.2.0 | perf train |
 | --- | ---: | ---: |
