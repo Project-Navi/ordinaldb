@@ -4,6 +4,17 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
+# Preflight: a release tag must never carry git-sourced dependencies — the
+# offline-registry staging below reads Cargo.lock and cannot supply git+
+# sources as registry crates. The pre-publish [patch.crates-io] block in
+# the workspace root must be removed before tagging (see RELEASING.md).
+if grep -q '^source = "git+' Cargo.lock; then
+    echo "ERROR: Cargo.lock contains git-sourced dependencies; remove the" >&2
+    echo "workspace [patch.crates-io] block before tagging a release." >&2
+    exit 1
+fi
+
+
 if ! command -v cargo-local-registry >/dev/null 2>&1; then
   echo "error: cargo-local-registry is required; install with: cargo install cargo-local-registry --version 0.2.12 --locked" >&2
   exit 1
@@ -193,13 +204,3 @@ done
 verify_downstream_consumer
 
 echo "OK: packaged Rust crates verified by downstream staged local registry checks."
-
-# Preflight: a release tag must never carry git-sourced dependencies — the
-# offline-registry staging below reads Cargo.lock and cannot supply git+
-# sources as registry crates. The pre-publish [patch.crates-io] block in
-# the workspace root must be removed before tagging (see RELEASING.md).
-if grep -q '^source = "git+' Cargo.lock; then
-    echo "ERROR: Cargo.lock contains git-sourced dependencies; remove the" >&2
-    echo "workspace [patch.crates-io] block before tagging a release." >&2
-    exit 1
-fi
