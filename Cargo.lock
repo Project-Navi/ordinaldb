@@ -556,7 +556,7 @@ dependencies = [
 [[package]]
 name = "ordvec"
 version = "0.5.0"
-source = "git+https://github.com/Project-Navi/ordvec?branch=integration%2Ffull-stack#90f287388c992feba819488864a6af814da0b330"
+source = "git+https://github.com/Project-Navi/ordvec?branch=integration%2Ffull-stack#7aec40fc913290a9c44d8be942152819e6b86e7a"
 dependencies = [
  "rayon",
 ]
@@ -564,7 +564,7 @@ dependencies = [
 [[package]]
 name = "ordvec-manifest"
 version = "0.5.0"
-source = "git+https://github.com/Project-Navi/ordvec?branch=integration%2Ffull-stack#90f287388c992feba819488864a6af814da0b330"
+source = "git+https://github.com/Project-Navi/ordvec?branch=integration%2Ffull-stack#7aec40fc913290a9c44d8be942152819e6b86e7a"
 dependencies = [
  "chrono",
  "hex",
