@@ -2612,6 +2612,32 @@ mod tests {
     #[test]
     fn ltr_features_auxiliary_bytes_flag_env_default_precedence() {
         const ENV_VAR: &str = "ORDINALDB_MAX_AUXILIARY_ARTIFACT_BYTES";
+
+        /// Restores the env var to its pre-test state on drop, so a failed
+        /// assertion cannot leak `ENV_VAR` into other tests in this process.
+        struct EnvVarGuard {
+            key: &'static str,
+            prev: Option<std::ffi::OsString>,
+        }
+
+        impl EnvVarGuard {
+            fn capture(key: &'static str) -> Self {
+                Self {
+                    key,
+                    prev: std::env::var_os(key),
+                }
+            }
+        }
+
+        impl Drop for EnvVarGuard {
+            fn drop(&mut self) {
+                match self.prev.take() {
+                    Some(value) => std::env::set_var(self.key, value),
+                    None => std::env::remove_var(self.key),
+                }
+            }
+        }
+
         const BASE_ARGS: [&str; 11] = [
             "ordinaldb",
             "ltr",
@@ -2640,6 +2666,8 @@ mod tests {
             }
         }
 
+        let _guard = EnvVarGuard::capture(ENV_VAR);
+
         std::env::remove_var(ENV_VAR);
         assert_eq!(parse_limit(&BASE_ARGS), 2 * 1024 * 1024 * 1024);
 
@@ -2649,8 +2677,6 @@ mod tests {
         let mut flag_args = BASE_ARGS.to_vec();
         flag_args.extend(["--max-auxiliary-artifact-bytes", "42"]);
         assert_eq!(parse_limit(&flag_args), 42);
-
-        std::env::remove_var(ENV_VAR);
     }
 
     fn write_payload_exports(path: &Path, payloads: &LegacyPayloads) {
