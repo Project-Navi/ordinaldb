@@ -141,6 +141,27 @@ fn percentile(sorted_us: &[u128], p: f64) -> u128 {
     sorted_us[idx]
 }
 
+/// Minimal JSON string escaper for values interpolated into the hand-built
+/// report (quotes, backslashes, control characters). The report is assembled
+/// manually to keep this excluded crate free of a serde_json dependency.
+fn json_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\u{08}' => out.push_str("\\b"),
+            '\u{0C}' => out.push_str("\\f"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
 struct QueryStats {
     mean_us: f64,
     p50_us: u128,
@@ -150,7 +171,11 @@ struct QueryStats {
     recall_at_10: f64,
 }
 
+/// Recall@`at` over per-query result rows of stride `k` (the effective k the
+/// index returned, which may be smaller than the requested `K` on small
+/// corpora); `at` is clamped to `k` so short rows never misindex.
 fn recall(indices: &[i64], qids: &[i64], k: usize, at: usize) -> f64 {
+    let at = at.min(k);
     let hits = qids
         .iter()
         .enumerate()
@@ -166,21 +191,33 @@ fn run_queries(
     dim: usize,
     options: DenseSearchOptions,
     limit: usize,
-) -> (QueryStats, Vec<i64>) {
+) -> (QueryStats, Vec<i64>, usize) {
     let nq = (queries.len() / dim).min(limit);
+    assert!(nq > 0, "run_queries requires at least one query (validated in main)");
     let qids = &qids[..nq];
     // Warm-up pass over the first 32 queries.
     for q in 0..nq.min(32) {
         let _ = index.search_with_options(&queries[q * dim..(q + 1) * dim], K, options);
     }
     let mut latencies_us = Vec::with_capacity(nq);
-    let mut all_indices = Vec::with_capacity(nq * K);
+    // The index clamps the requested K to the search/candidate space, so use
+    // the effective k it reports (`SearchResults.k`) for all buffer layout.
+    let mut all_indices = Vec::new();
+    let mut effective_k: Option<usize> = None;
     for q in 0..nq {
         let t = Instant::now();
         let res = index.search_with_options(&queries[q * dim..(q + 1) * dim], K, options);
         latencies_us.push(t.elapsed().as_micros());
+        match effective_k {
+            None => {
+                all_indices.reserve(nq * res.k);
+                effective_k = Some(res.k);
+            }
+            Some(k) => assert_eq!(res.k, k, "effective k changed between queries"),
+        }
         all_indices.extend_from_slice(&res.indices);
     }
+    let effective_k = effective_k.expect("nq > 0 guarantees at least one search");
     let mut sorted = latencies_us.clone();
     sorted.sort_unstable();
     let stats = QueryStats {
@@ -188,10 +225,10 @@ fn run_queries(
         p50_us: percentile(&sorted, 0.50),
         p95_us: percentile(&sorted, 0.95),
         p99_us: percentile(&sorted, 0.99),
-        recall_at_1: recall(&all_indices, qids, K, 1),
-        recall_at_10: recall(&all_indices, qids, K, 10),
+        recall_at_1: recall(&all_indices, qids, effective_k, 1),
+        recall_at_10: recall(&all_indices, qids, effective_k, 10),
     };
-    (stats, all_indices)
+    (stats, all_indices, effective_k)
 }
 
 fn main() {
@@ -210,7 +247,16 @@ fn main() {
     let (mut reader, rows, dim) = npy_open(&args.corpus_npy);
     eprintln!("corpus: {rows} rows x {dim} dims");
     let mut index = OrdinalIndex::new(dim, BITS).expect("construct index");
-    assert!(index.has_sign_sidecar(), "sign sidecar must be on by default");
+    if !index.has_sign_sidecar() {
+        eprintln!(
+            "error: no sign sidecar for dim={dim}. OrdinalDB creates the sign sidecar \
+             (which this harness requires for its two-stage measurements) only when \
+             bits == 2 and dim is a multiple of 64; dim={dim} has dim % 64 == {}. \
+             Re-export the corpus at a multiple-of-64 dimension to benchmark it here.",
+            dim % 64
+        );
+        std::process::exit(1);
+    }
     let t_ingest = Instant::now();
     let mut done = 0usize;
     let mut read_secs = 0f64;
@@ -296,23 +342,35 @@ fn main() {
     for (si, (qpath, qids_path)) in args.queries_npy.iter().zip(&args.qids_jsonl).enumerate() {
         let set = set_name(qpath);
         let (mut qr, nq, qcols) = npy_open(qpath);
+        if nq == 0 {
+            eprintln!(
+                "error: query set {} is empty (0 rows); every --queries-npy file \
+                 must contain at least one query",
+                qpath.display()
+            );
+            std::process::exit(1);
+        }
         assert_eq!(qcols, dim, "query dim mismatch: {}", qpath.display());
         let queries = read_rows(&mut qr, nq, qcols);
         let qids = load_qids(qids_path);
         assert_eq!(qids.len(), nq, "qids/queries count mismatch: {}", qids_path.display());
 
         // Sequential single-query latency + recall, default Auto (two-stage).
-        let (auto_stats, auto_indices) =
+        let (auto_stats, auto_indices, auto_k) =
             run_queries(&index, &queries, &qids, dim, DenseSearchOptions::default(), nq);
+        if auto_k < K {
+            eprintln!("note: index clamped requested k={K} to effective k={auto_k}");
+        }
 
         // Batched throughput: one call, all queries.
         let t_batch = Instant::now();
         let batch_res = index.search_with_options(&queries, K, DenseSearchOptions::default());
         let batch_secs = t_batch.elapsed().as_secs_f64();
-        assert_eq!(batch_res.indices.len(), nq * K);
+        assert_eq!(batch_res.k, auto_k, "batch effective k diverged from sequential");
+        assert_eq!(batch_res.indices.len(), nq * batch_res.k);
 
         // Exact RankQuant scan on a subset.
-        let (exact_stats, _) = run_queries(
+        let (exact_stats, _, _) = run_queries(
             &index,
             &queries,
             &qids,
@@ -321,10 +379,20 @@ fn main() {
             EXACT_SUBSET,
         );
 
-        // Dump Auto top-10 ids for external cosine-baseline comparison.
+        // Dump Auto top-K ids for external cosine-baseline comparison. The
+        // file keeps a fixed nq x K stride; rows are padded with -1 when the
+        // index clamped k below K (row ids are never negative).
         let mut dump =
-            File::create(out_dir.join(format!("{set}_ordinal_top10.i64"))).expect("dump file");
-        let bytes: Vec<u8> = auto_indices.iter().flat_map(|i| i.to_le_bytes()).collect();
+            File::create(out_dir.join(format!("{set}_ordinal_top{K}.i64"))).expect("dump file");
+        let mut bytes: Vec<u8> = Vec::with_capacity(nq * K * 8);
+        for q in 0..nq {
+            for id in &auto_indices[q * auto_k..(q + 1) * auto_k] {
+                bytes.extend_from_slice(&id.to_le_bytes());
+            }
+            for _ in auto_k..K {
+                bytes.extend_from_slice(&(-1i64).to_le_bytes());
+            }
+        }
         dump.write_all(&bytes).expect("write dump");
 
         eprintln!(
@@ -338,8 +406,9 @@ fn main() {
             exact_stats.p50_us,
             exact_stats.recall_at_10,
         );
+        let set_key = json_escape(&set);
         report.push_str(&format!(
-            "    \"{set}\": {{\n      \"queries\": {nq},\n      \
+            "    \"{set_key}\": {{\n      \"queries\": {nq},\n      \
              \"auto_mean_us\": {:.1},\n      \"auto_p50_us\": {},\n      \
              \"auto_p95_us\": {},\n      \"auto_p99_us\": {},\n      \
              \"auto_recall_at_1\": {:.4},\n      \"auto_recall_at_10\": {:.4},\n      \
@@ -368,4 +437,55 @@ fn main() {
     report.push_str(&format!("  \"vm_hwm_kb\": {vm_hwm_kb}\n}}\n"));
     std::fs::write(out_dir.join("bench-results.json"), &report).expect("write report");
     eprintln!("peak rss {} MB; results at {}", vm_hwm_kb / 1024, out_dir.display());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn json_escape_passes_plain_names_through() {
+        assert_eq!(json_escape("title"), "title");
+        assert_eq!(json_escape("abstract_2048"), "abstract_2048");
+    }
+
+    #[test]
+    fn json_escape_handles_quotes_backslashes_and_controls() {
+        assert_eq!(json_escape("a\"b"), "a\\\"b");
+        assert_eq!(json_escape("a\\b"), "a\\\\b");
+        assert_eq!(json_escape("a\nb\tc\rd"), "a\\nb\\tc\\rd");
+        assert_eq!(json_escape("a\u{08}\u{0C}b"), "a\\b\\fb");
+        assert_eq!(json_escape("a\u{01}b"), "a\\u0001b");
+    }
+
+    #[test]
+    fn recall_uses_effective_k_stride() {
+        // Two queries, effective k = 3 (not the harness K of 10).
+        let indices = [7, 1, 2, 9, 4, 5];
+        let qids = [7, 5];
+        assert_eq!(recall(&indices, &qids, 3, 1), 0.5); // qid 5 is not rank-1
+        assert_eq!(recall(&indices, &qids, 3, 3), 1.0);
+    }
+
+    #[test]
+    fn recall_clamps_at_to_effective_k() {
+        // Requesting recall@10 with only 2 hits per query must not misindex.
+        let indices = [7, 1, 9, 4];
+        let qids = [1, 3];
+        assert_eq!(recall(&indices, &qids, 2, 10), 0.5);
+    }
+
+    #[test]
+    fn percentile_picks_nearest_rank() {
+        let sorted = [10u128, 20, 30, 40, 50];
+        assert_eq!(percentile(&sorted, 0.0), 10);
+        assert_eq!(percentile(&sorted, 0.50), 30);
+        assert_eq!(percentile(&sorted, 1.0), 50);
+    }
+
+    #[test]
+    fn set_name_strips_queries_suffix() {
+        assert_eq!(set_name(Path::new("/data/title_queries.npy")), "title");
+        assert_eq!(set_name(Path::new("plain.npy")), "plain");
+    }
 }
