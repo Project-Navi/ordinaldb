@@ -7,7 +7,7 @@ use ordinaldb_adapter_store::{
 use ordinaldb_core::{
     AddError, ConstructError, DenseError, IdMapIndex, OrdinalIndex, SearchResults,
 };
-use pyo3::buffer::{Element, PyBuffer, PyUntypedBuffer};
+use pyo3::buffer::{Element, PyBuffer, PyUntypedBuffer, ReadOnlyCell};
 use pyo3::exceptions::{PyOSError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyList, PyModule, PyType};
@@ -103,11 +103,12 @@ impl PyOrdinalIndex {
             Some(mask) => Some(mask_values_1d(mask, self.inner.len())?),
             None => None,
         };
-        let mask_ref = mask_values.as_ref().map(MaskValues::as_mask_ref);
         let inner = &self.inner;
         let results = py
             .detach(|| -> Result<SearchResults, DenseError> {
-                match mask_ref {
+                // Cell views are derived after detach: the pin crosses
+                // the boundary, the borrowed view does not need to.
+                match mask_values.as_ref().map(MaskValues::as_mask_ref) {
                     Some(mask_ref) => {
                         let candidates = mask_ref.candidates()?;
                         inner.search_checked_with_candidates(&query_slice, k, &candidates)
@@ -555,10 +556,17 @@ impl PyIdMapIndex {
             Some(allowlist) => Some(pinned_ids_1d(allowlist, "allowlist")?),
             None => None,
         };
-        let allowlist_ids = allowlist_pinned.as_ref().map(PinnedSlice::as_slice);
         let inner = &self.inner;
         let (scores, ids) = py
-            .detach(|| inner.search_checked_with_allowlist(&query_slice, k, allowlist_ids))
+            .detach(|| {
+                // One off-GIL pass through the cell view: the core API
+                // takes `&[u64]`, and a plain borrow of Python-mutable
+                // memory would be unsound (see `PinnedSlice::as_cells`).
+                let allowlist_owned: Option<Vec<u64>> = allowlist_pinned
+                    .as_ref()
+                    .map(|pinned| pinned.as_cells().iter().map(ReadOnlyCell::get).collect());
+                inner.search_checked_with_allowlist(&query_slice, k, allowlist_owned.as_deref())
+            })
             .map_err(dense_err)?;
         Ok((array_f32(py, scores)?, array_u64(py, ids)?))
     }
@@ -744,6 +752,16 @@ struct PinnedSlice<T> {
     len: usize,
 }
 
+// SAFETY: the raw pointer targets exporter memory that the held
+// `Py_buffer` keeps alive regardless of thread (CPython buffer-protocol
+// pin; pyo3's buffer wrappers are themselves Send + Sync and release
+// correctly from any thread), and every read goes through
+// `ReadOnlyCell` views, so concurrent Python-side writes yield
+// unspecified values rather than UB. Crossing the GIL-released
+// boundary is the type's purpose.
+unsafe impl<T: Send + Sync> Send for PinnedSlice<T> {}
+unsafe impl<T: Send + Sync> Sync for PinnedSlice<T> {}
+
 impl<T> PinnedSlice<T> {
     /// Capture the raw parts of `buffer` for zero-copy slice reads.
     ///
@@ -766,20 +784,27 @@ impl<T> PinnedSlice<T> {
         self.len
     }
 
-    /// View the pinned buffer as a plain slice.
-    ///
-    /// The bindings never write through this view, but Python callers
-    /// must not mutate the exporting array while a search is in flight
-    /// (the standard contract for zero-copy buffer consumers; the
-    /// GIL-released native call cannot observe such writes safely).
-    fn as_slice(&self) -> &[T] {
+    /// View the pinned buffer as `ReadOnlyCell`-wrapped elements,
+    /// mirroring `PyBuffer::as_slice`'s defense for the same problem:
+    /// another Python thread may mutate the exporting array's contents
+    /// in place while the GIL is released (the buffer protocol pins the
+    /// allocation, not the bytes). The `UnsafeCell` wrapper stops the
+    /// compiler from assuming immutability across the borrow, so a
+    /// concurrent writer yields unspecified *values* rather than
+    /// undefined behavior. This is the same accepted trade-off as
+    /// pyo3's `PyBuffer` and rust-numpy's readonly views.
+    fn as_cells(&self) -> &[ReadOnlyCell<T>]
+    where
+        T: pyo3::buffer::Element,
+    {
         if self.len == 0 {
             return &[];
         }
         // SAFETY: `_buffer` pins the exporter's memory for `self`'s
-        // lifetime, and `Self::new`'s contract guarantees `len` readable
-        // elements of `T` starting at `ptr`.
-        unsafe { std::slice::from_raw_parts(self.ptr, self.len) }
+        // lifetime; `Self::new`'s contract guarantees `len` readable
+        // elements of `T` at `ptr`; `ReadOnlyCell<T>` is a transparent
+        // wrapper over `UnsafeCell<T>` with the same layout as `T`.
+        unsafe { std::slice::from_raw_parts(self.ptr.cast::<ReadOnlyCell<T>>(), self.len) }
     }
 }
 
@@ -794,7 +819,7 @@ enum MaskValues {
 impl MaskValues {
     fn as_mask_ref(&self) -> MaskRef<'_> {
         match self {
-            MaskValues::Pinned(pinned) => MaskRef::Bytes(pinned.as_slice()),
+            MaskValues::Pinned(pinned) => MaskRef::Bytes(pinned.as_cells()),
             MaskValues::Owned(values) => MaskRef::Bools(values),
         }
     }
@@ -805,8 +830,9 @@ impl MaskValues {
 #[derive(Clone, Copy)]
 enum MaskRef<'a> {
     /// Raw bytes of a NumPy bool array: one byte per element, nonzero
-    /// means the slot is allowed.
-    Bytes(&'a [u8]),
+    /// means the slot is allowed. Cell-wrapped: see
+    /// [`PinnedSlice::as_cells`].
+    Bytes(&'a [ReadOnlyCell<u8>]),
     /// Owned booleans produced by the `tolist()` fallback.
     Bools(&'a [bool]),
 }
@@ -818,7 +844,7 @@ impl MaskRef<'_> {
     /// `search_checked_with_candidates` taking `&[u32]` candidates.
     fn candidates(self) -> Result<Vec<u32>, DenseError> {
         match self {
-            MaskRef::Bytes(bytes) => candidate_slots(bytes.iter().map(|byte| *byte != 0)),
+            MaskRef::Bytes(bytes) => candidate_slots(bytes.iter().map(|byte| byte.get() != 0)),
             MaskRef::Bools(values) => candidate_slots(values.iter().copied()),
         }
     }

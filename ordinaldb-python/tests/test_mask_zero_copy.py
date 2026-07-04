@@ -265,3 +265,43 @@ class FilteredSearchReleasesGilTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ConcurrentMutationContractTest(unittest.TestCase):
+    """The zero-copy pin tolerates concurrent Python-side mutation.
+
+    Mutating the mask array from another thread while a search runs
+    off-GIL yields unspecified *values* (the search may see any mix of
+    old and new bytes) but must never crash, corrupt memory, or return
+    malformed results: reads go through cell views, so this is defined
+    behavior by construction (see PinnedSlice::as_cells).
+    """
+
+    def test_concurrent_mask_mutation_never_crashes(self):
+        import threading
+
+        dim, rows = 64, 4096
+        rng = np.random.default_rng(7)
+        vectors = rng.standard_normal((rows, dim), dtype=np.float32)
+        index = OrdinalIndex(dim=dim, bits=2)
+        index.add(vectors)
+        queries = rng.standard_normal((4, dim), dtype=np.float32)
+        mask = np.ones(rows, dtype=bool)
+
+        stop = threading.Event()
+
+        def mutate():
+            flip = True
+            while not stop.is_set():
+                mask[: rows // 2] = flip
+                flip = not flip
+
+        writer = threading.Thread(target=mutate)
+        writer.start()
+        try:
+            for _ in range(50):
+                scores, ids = index.search(queries, k=5, mask=mask)
+                self.assertEqual(np.asarray(ids).shape, (4 * 5,))
+        finally:
+            stop.set()
+            writer.join()
