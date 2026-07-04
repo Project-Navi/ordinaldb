@@ -11,6 +11,12 @@ if a release workflow ever grows a publish step. Future automation, if any,
 should use Trusted Publishing where available and human-reviewed GitHub
 Environments.
 
+> **Pre-tag check:** the workspace root may carry a pre-publish
+> `[patch.crates-io]` block pinning ordvec crates to git integration heads.
+> It MUST be removed (and Cargo.lock regenerated) before tagging;
+> `scripts/release_crate_package_smoke.sh` fails loudly if any git-sourced
+> dependency remains in Cargo.lock.
+
 ## Tags
 
 - Rust crate: `ordinaldb-vMAJOR.MINOR.PATCH` (e.g. `ordinaldb-v0.2.0`)
