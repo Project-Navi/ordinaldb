@@ -107,6 +107,21 @@ class OrdinalMaskEquivalenceTests(unittest.TestCase):
         np.testing.assert_array_equal(actual[0], expected[0])
         np.testing.assert_array_equal(actual[1], expected[1])
 
+    def test_non_numpy_bool_buffer_accepted(self):
+        # The documented mask contract is the buffer shape/format, not
+        # the ndarray type: any 1D C-contiguous bool-format (PEP 3118
+        # "?") exporter takes the zero-copy fast path. A memoryview
+        # cast to "?" is the stdlib representative.
+        mask = RNG.random(N_ROWS) < 0.5
+        stdlib_mask = memoryview(bytearray(mask.tobytes())).cast("?")
+        self.assertEqual(stdlib_mask.format, "?")
+
+        expected = self.index.search(self.queries, k=8, mask=mask)
+        actual = self.index.search(self.queries, k=8, mask=stdlib_mask)
+
+        np.testing.assert_array_equal(actual[0], expected[0])
+        np.testing.assert_array_equal(actual[1], expected[1])
+
     def test_all_false_mask_matches_legacy_empty_results(self):
         mask = np.zeros(N_ROWS, dtype=np.bool_)
 
@@ -263,10 +278,6 @@ class FilteredSearchReleasesGilTests(unittest.TestCase):
         self._assert_progress(iterations, elapsed, "allowlist search")
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class ConcurrentMutationContractTest(unittest.TestCase):
     """The zero-copy pin tolerates concurrent Python-side mutation.
 
@@ -305,3 +316,7 @@ class ConcurrentMutationContractTest(unittest.TestCase):
         finally:
             stop.set()
             writer.join()
+
+
+if __name__ == "__main__":
+    unittest.main()

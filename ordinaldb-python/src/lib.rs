@@ -75,11 +75,13 @@ impl PyOrdinalIndex {
     ///         shape `(nq, dim)`.
     ///     k: Number of results per query. Capped at the number of
     ///         searchable rows.
-    ///     mask: Optional 1D NumPy bool array of length `len(self)`;
-    ///         only slots where the mask is True are searched. The
-    ///         mask's buffer is borrowed zero-copy for the duration of
-    ///         the call and must not be mutated concurrently by
-    ///         another thread.
+    ///     mask: Optional 1D C-contiguous bool buffer of length
+    ///         `len(self)` -- typically a NumPy bool array, but any
+    ///         object exporting a one-byte bool-format (PEP 3118 `?`)
+    ///         buffer is accepted; only slots where the mask is True
+    ///         are searched. The mask's buffer is borrowed zero-copy
+    ///         for the duration of the call and must not be mutated
+    ///         concurrently by another thread.
     ///
     /// Returns:
     ///     Tuple `(scores, indices)` of flat NumPy arrays (float32,
@@ -881,8 +883,11 @@ fn mask_values_1d(mask: &Bound<'_, PyAny>, expected_len: usize) -> PyResult<Mask
     mask_1d(mask, expected_len).map(MaskValues::Owned)
 }
 
-/// Zero-copy fast path: pin the byte buffer of a 1D C-contiguous NumPy
-/// bool array (buffer-protocol format `?`, one byte per element).
+/// Zero-copy fast path: pin the byte buffer of a 1D C-contiguous
+/// bool-format buffer (buffer-protocol format `?`, one byte per
+/// element). NumPy bool arrays are the typical exporter, but any
+/// object exporting such a buffer is accepted -- the documented mask
+/// contract is the buffer shape/format, not the ndarray type.
 ///
 /// Returns `None` for anything else so the caller can fall back to the
 /// legacy conversion path and its established error messages.
