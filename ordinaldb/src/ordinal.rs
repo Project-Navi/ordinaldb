@@ -1677,11 +1677,13 @@ mod chunk_scheduler_tests {
         assert_eq!(chunk, 8);
     }
 
-    /// The tile floor bounds splitting: even a huge pool never shrinks
-    /// chunks below TILE_FLOOR queries of shared scanning.
+    /// The tile floor bounds splitting: even a wide pool never shrinks
+    /// chunks below TILE_FLOOR queries of shared scanning. (16 threads is
+    /// enough to make the floor bind — ceil(512/16) = 32 < TILE_FLOOR —
+    /// without oversubscribing small CI runners.)
     #[test]
     fn tile_floor_bounds_splitting() {
-        let chunk = in_pool(64, || two_stage_query_chunk_rows(320, 512));
+        let chunk = in_pool(16, || two_stage_query_chunk_rows(320, 512));
         assert_eq!(chunk, 32);
     }
 
