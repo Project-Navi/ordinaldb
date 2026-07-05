@@ -17,7 +17,7 @@ loaded index keeps the same default two-stage search path. ID-mapped indexes
 store their external `u64` IDs in `ids.bin`, also declared as a required
 auxiliary artifact.
 
-New OrdinalDB writes use the OrdVec 0.5 artifact filenames `index.ovrq` and
+New OrdinalDB writes use the current OrdVec artifact filenames `index.ovrq` and
 `sign.ovsb`. Loads remain manifest-driven: existing bundles whose manifest
 points at legacy `index.tvrq` or `sign.tvsb` files still load as long as the
 manifest verifies those files.
@@ -38,7 +38,7 @@ OrdinalDB owns only the database-layer semantics:
 - `slot_to_id` and `id_to_slot` reconstruction;
 - `io::ErrorKind::InvalidData` for malformed OrdinalDB sidecars.
 
-OrdinalDB depends on the published `ordvec-manifest` 0.5.0 crate. This keeps
+OrdinalDB depends on the `ordvec-manifest` 0.6.0 crate. This keeps
 manifest verification in the OrdVec project instead of duplicating verifier
 code inside OrdinalDB.
 
@@ -165,7 +165,10 @@ writes out the complete current vector set as a brand-new generation, so its
 cost scales with total store size rather than with how many records changed
 since the last save. Measured full-generation adapter save times in
 [`limits.md`](limits.md) are approximately 0.47s at 10,000 rows and 1.91s at
-100,000 rows. Calling `save()` (or Agno's `auto_save=True`) once per inserted
+100,000 rows — these figures describe the adapter-directory path, whose
+recommended planning limit is ~100,000 rows per directory. The core
+`OrdinalIndex` path is separate: it scales to 1M+ rows in a single self-contained,
+verified `.odb` bundle. Calling `save()` (or Agno's `auto_save=True`) once per inserted
 record therefore multiplies a cost that grows with the store, not a flat
 per-call fee — batch writes and call `save()`/`persist()`/`save_local()` once
 per batch instead of once per item.

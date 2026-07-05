@@ -39,7 +39,7 @@ is the honest claim, never "immune."
 The strongest near-term story is the first row. Retrieval corpora are becoming
 part of the supply chain for agentic systems; a sealed index makes "what the
 LLM retrieves" tamper-evident in the adversarial sense, not just the
-corruption sense. Neither Chroma nor LanceDB offers this.
+corruption sense.
 
 ## Design sketch
 

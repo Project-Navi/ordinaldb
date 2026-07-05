@@ -19,11 +19,10 @@ Stores that score with cosine or dot products require truncated MRL vectors
 to be re-normalized or their scores skew; OrdinalDB structurally cannot get
 this wrong.
 
-Measured (200 documents, 8B-parameter Qwen3 embeddings at 512 dims, raw
-truncation vs. truncation + L2 renormalization): retrieved indices and
-ranking were identical across all 220 probe queries; score differences were
-at the level of one float32 ULP (arithmetic noise from the normalization
-division itself).
+L2 renormalization is exactly a per-vector positive scaling, so it leaves
+every rank and sign untouched. OrdinalDB therefore returns the identical
+candidate set and ranking whether or not you renormalize a truncated MRL
+prefix — the step is a no-op here by construction, not by tuning.
 
 ## Choosing a truncation dimension
 
@@ -36,31 +35,18 @@ division itself).
 - The ceiling is `u16` (65,535); out-of-range or bits-incompatible
   dimensions are rejected with a descriptive error at construction.
 
-## What truncation costs (measured)
+## What truncation costs
 
-Recall@10 of OrdinalDB search against exact float dot-product over the same
-truncated prefix isolates the ordinal-quantization cost; against the
-full-dimension exact ranking it shows the total cost including MRL
-truncation itself (which any store pays):
+Two costs stack when you truncate an MRL embedding and index it:
 
-| dim | vs. prefix-exact | vs. full-exact |
-| --- | --- | --- |
-| 4096 | 0.895 | 0.895 |
-| 2048 | 0.885 | 0.830 |
-| 1024 | 0.845 | 0.800 |
-| 512 | 0.805 | 0.720 |
-| 256 | 0.785 | 0.655 |
-| 128 | 0.740 | 0.585 |
-| 64 | 0.640 | 0.495 |
+- **MRL truncation itself** — scoring a shorter prefix instead of the full
+  vector. Every vector store pays this identically; it is a property of the
+  embedding model, not of OrdinalDB.
+- **Ordinal quantization** — OrdinalDB's rank/sign coding applied on top of
+  the truncated prefix.
 
-Quantization loss degrades gracefully down the ladder; the steeper
-full-exact column is MRL truncation's own cost and is identical for any
-vector store. On-disk compression held at roughly 10x vs. raw `f32` at
-every dimension, and single-query latency stayed in the tens of
-microseconds at this corpus size (p50 31.5 µs at 4096 dims).
-
-Method notes: 200 documents / 20 labeled queries, real Qwen3-Embedding-8B
-(GGUF Q4_K_M) vectors generated locally via Ollama, single workstation,
-`bits=2` throughout. Small-corpus numbers are for shape, not absolute
-benchmark claims; rerun at your corpus size before relying on a specific
-operating point.
+Both degrade gracefully as the dimension shrinks rather than falling off a
+cliff, and on-disk size stays roughly 10x smaller than raw `f32` at every
+truncation point. The right operating point is corpus- and model-specific:
+measure recall at your own dimensions and corpus size before committing to a
+truncation dimension.
