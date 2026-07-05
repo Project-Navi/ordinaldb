@@ -7,7 +7,7 @@ use ordinaldb_adapter_store::{
 use ordinaldb_core::{
     AddError, ConstructError, DenseError, IdMapIndex, OrdinalIndex, SearchResults,
 };
-use pyo3::buffer::{Element, PyBuffer};
+use pyo3::buffer::{Element, PyBuffer, PyUntypedBuffer, ReadOnlyCell};
 use pyo3::exceptions::{PyOSError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyList, PyModule, PyType};
@@ -75,8 +75,13 @@ impl PyOrdinalIndex {
     ///         shape `(nq, dim)`.
     ///     k: Number of results per query. Capped at the number of
     ///         searchable rows.
-    ///     mask: Optional 1D NumPy bool array of length `len(self)`;
-    ///         only slots where the mask is True are searched.
+    ///     mask: Optional 1D C-contiguous bool buffer of length
+    ///         `len(self)` -- typically a NumPy bool array, but any
+    ///         object exporting a one-byte bool-format (PEP 3118 `?`)
+    ///         buffer is accepted; only slots where the mask is True
+    ///         are searched. The mask's buffer is borrowed zero-copy
+    ///         for the duration of the call and must not be mutated
+    ///         concurrently by another thread.
     ///
     /// Returns:
     ///     Tuple `(scores, indices)` of flat NumPy arrays (float32,
@@ -97,15 +102,17 @@ impl PyOrdinalIndex {
     ) -> PyResult<(Bound<'py, PyAny>, Bound<'py, PyAny>)> {
         let (query_slice, _dim) = queries_2d(py, &self.inner, queries)?;
         let mask_values = match mask {
-            Some(mask) => Some(mask_1d(mask, self.inner.len())?),
+            Some(mask) => Some(mask_values_1d(mask, self.inner.len())?),
             None => None,
         };
         let inner = &self.inner;
         let results = py
             .detach(|| -> Result<SearchResults, DenseError> {
-                match &mask_values {
-                    Some(mask_values) => {
-                        let candidates = mask_candidates(mask_values)?;
+                // Cell views are derived after detach: the pin crosses
+                // the boundary, the borrowed view does not need to.
+                match mask_values.as_ref().map(MaskValues::as_mask_ref) {
+                    Some(mask_ref) => {
+                        let candidates = mask_ref.candidates()?;
                         inner.search_checked_with_candidates(&query_slice, k, &candidates)
                     }
                     None => inner.search_checked(&query_slice, k),
@@ -524,7 +531,10 @@ impl PyIdMapIndex {
     ///     k: Number of results per query. Capped at the number of
     ///         searchable rows.
     ///     allowlist: Optional 1D NumPy uint64 array; only these ids are
-    ///         searched. Every id must be present in the index.
+    ///         searched. Every id must be present in the index. The
+    ///         allowlist's buffer is borrowed zero-copy for the
+    ///         duration of the call and must not be mutated
+    ///         concurrently by another thread.
     ///
     /// Returns:
     ///     Tuple `(scores, ids)` of flat NumPy arrays (float32, uint64),
@@ -544,14 +554,20 @@ impl PyIdMapIndex {
         allowlist: Option<&Bound<'py, PyAny>>,
     ) -> PyResult<(Bound<'py, PyAny>, Bound<'py, PyAny>)> {
         let (query_slice, _dim) = id_queries_2d(py, &self.inner, queries)?;
-        let allowlist_ids = match allowlist {
-            Some(allowlist) => Some(ids_1d(py, allowlist, "allowlist")?),
+        let allowlist_pinned = match allowlist {
+            Some(allowlist) => Some(pinned_ids_1d(allowlist, "allowlist")?),
             None => None,
         };
         let inner = &self.inner;
         let (scores, ids) = py
             .detach(|| {
-                inner.search_checked_with_allowlist(&query_slice, k, allowlist_ids.as_deref())
+                // One off-GIL pass through the cell view: the core API
+                // takes `&[u64]`, and a plain borrow of Python-mutable
+                // memory would be unsound (see `PinnedSlice::as_cells`).
+                let allowlist_owned: Option<Vec<u64>> = allowlist_pinned
+                    .as_ref()
+                    .map(|pinned| pinned.as_cells().iter().map(ReadOnlyCell::get).collect());
+                inner.search_checked_with_allowlist(&query_slice, k, allowlist_owned.as_deref())
             })
             .map_err(dense_err)?;
         Ok((array_f32(py, scores)?, array_u64(py, ids)?))
@@ -725,6 +741,175 @@ fn ids_1d(py: Python<'_>, ids: &Bound<'_, PyAny>, name: &str) -> PyResult<Vec<u6
     buffer_vec(py, &buffer, name)
 }
 
+/// A Python buffer pinned for zero-copy reads while the GIL is released.
+///
+/// Owning the [`PyUntypedBuffer`] keeps the exporter's memory alive (the
+/// underlying `Py_buffer` holds a strong reference to the exporting
+/// object) until this value is dropped, so the raw parts captured at
+/// construction stay valid without re-entering Python.
+struct PinnedSlice<T> {
+    /// Never read; held so the exporter keeps the memory pinned.
+    _buffer: PyUntypedBuffer,
+    ptr: *const T,
+    len: usize,
+}
+
+// SAFETY: the raw pointer targets exporter memory that the held
+// `Py_buffer` keeps alive regardless of thread (CPython buffer-protocol
+// pin; pyo3's buffer wrappers are themselves Send + Sync and release
+// correctly from any thread), and every read goes through
+// `ReadOnlyCell` views, so concurrent Python-side writes yield
+// unspecified values rather than UB. Crossing the GIL-released
+// boundary is the type's purpose.
+unsafe impl<T: Send + Sync> Send for PinnedSlice<T> {}
+unsafe impl<T: Send + Sync> Sync for PinnedSlice<T> {}
+
+impl<T> PinnedSlice<T> {
+    /// Capture the raw parts of `buffer` for zero-copy slice reads.
+    ///
+    /// # Safety
+    /// The caller must ensure `buffer` is C-contiguous and that its
+    /// element format, item size, and alignment are compatible with `T`
+    /// (for example via `PyUntypedBuffer::as_typed::<T>()`, or by
+    /// checking `item_size() == 1` for `u8`).
+    unsafe fn new(buffer: PyUntypedBuffer) -> Self {
+        let ptr = buffer.buf_ptr().cast_const().cast::<T>();
+        let len = buffer.item_count();
+        Self {
+            _buffer: buffer,
+            ptr,
+            len,
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.len
+    }
+
+    /// View the pinned buffer as `ReadOnlyCell`-wrapped elements,
+    /// mirroring `PyBuffer::as_slice`'s defense for the same problem:
+    /// another Python thread may mutate the exporting array's contents
+    /// in place while the GIL is released (the buffer protocol pins the
+    /// allocation, not the bytes). The `UnsafeCell` wrapper stops the
+    /// compiler from assuming immutability across the borrow, so a
+    /// concurrent writer yields unspecified *values* rather than
+    /// undefined behavior. This is the same accepted trade-off as
+    /// pyo3's `PyBuffer` and rust-numpy's readonly views.
+    fn as_cells(&self) -> &[ReadOnlyCell<T>]
+    where
+        T: pyo3::buffer::Element,
+    {
+        if self.len == 0 {
+            return &[];
+        }
+        // SAFETY: `_buffer` pins the exporter's memory for `self`'s
+        // lifetime; `Self::new`'s contract guarantees `len` readable
+        // elements of `T` at `ptr`; `ReadOnlyCell<T>` is a transparent
+        // wrapper over `UnsafeCell<T>` with the same layout as `T`.
+        unsafe { std::slice::from_raw_parts(self.ptr.cast::<ReadOnlyCell<T>>(), self.len) }
+    }
+}
+
+/// Validated mask payload for a filtered search: either a zero-copy pin
+/// of a NumPy bool array's byte buffer (fast path) or an owned
+/// `Vec<bool>` from the legacy duck-typed `tolist()` fallback.
+enum MaskValues {
+    Pinned(PinnedSlice<u8>),
+    Owned(Vec<bool>),
+}
+
+impl MaskValues {
+    fn as_mask_ref(&self) -> MaskRef<'_> {
+        match self {
+            MaskValues::Pinned(pinned) => MaskRef::Bytes(pinned.as_cells()),
+            MaskValues::Owned(values) => MaskRef::Bools(values),
+        }
+    }
+}
+
+/// Borrowed view of validated mask values, safe to read after the GIL
+/// has been released.
+#[derive(Clone, Copy)]
+enum MaskRef<'a> {
+    /// Raw bytes of a NumPy bool array: one byte per element, nonzero
+    /// means the slot is allowed. Cell-wrapped: see
+    /// [`PinnedSlice::as_cells`].
+    Bytes(&'a [ReadOnlyCell<u8>]),
+    /// Owned booleans produced by the `tolist()` fallback.
+    Bools(&'a [bool]),
+}
+
+impl MaskRef<'_> {
+    /// Collect the allowed slots into the candidate list the core
+    /// search API requires. Runs without the GIL; this is the only
+    /// remaining O(len) materialization on the filtered path, forced by
+    /// `search_checked_with_candidates` taking `&[u32]` candidates.
+    fn candidates(self) -> Result<Vec<u32>, DenseError> {
+        match self {
+            MaskRef::Bytes(bytes) => candidate_slots(bytes.iter().map(|byte| byte.get() != 0)),
+            MaskRef::Bools(values) => candidate_slots(values.iter().copied()),
+        }
+    }
+}
+
+fn candidate_slots(mask: impl Iterator<Item = bool>) -> Result<Vec<u32>, DenseError> {
+    let mut candidates = Vec::new();
+    for (slot, allowed) in mask.enumerate() {
+        if allowed {
+            let slot = u32::try_from(slot).map_err(|_| DenseError::SlotIndexOverflow(slot))?;
+            candidates.push(slot);
+        }
+    }
+    Ok(candidates)
+}
+
+/// Validate `mask` and prepare it for GIL-released consumption.
+///
+/// NumPy bool arrays take a zero-copy fast path: the byte buffer is
+/// pinned via the buffer protocol while the GIL is held (O(1)) and only
+/// scanned after the GIL has been released. Anything else falls back to
+/// the legacy duck-typed `tolist()` conversion, which owns the shape
+/// and dtype error reporting.
+fn mask_values_1d(mask: &Bound<'_, PyAny>, expected_len: usize) -> PyResult<MaskValues> {
+    if let Some(pinned) = mask_pinned_bytes(mask) {
+        if pinned.len() != expected_len {
+            return Err(value_err(format!(
+                "mask length {} does not match index length {expected_len}",
+                pinned.len()
+            )));
+        }
+        return Ok(MaskValues::Pinned(pinned));
+    }
+    mask_1d(mask, expected_len).map(MaskValues::Owned)
+}
+
+/// Zero-copy fast path: pin the byte buffer of a 1D C-contiguous
+/// bool-format buffer (buffer-protocol format `?`, one byte per
+/// element). NumPy bool arrays are the typical exporter, but any
+/// object exporting such a buffer is accepted -- the documented mask
+/// contract is the buffer shape/format, not the ndarray type.
+///
+/// Returns `None` for anything else so the caller can fall back to the
+/// legacy conversion path and its established error messages.
+fn mask_pinned_bytes(mask: &Bound<'_, PyAny>) -> Option<PinnedSlice<u8>> {
+    let buffer = PyUntypedBuffer::get(mask).ok()?;
+    if buffer.dimensions() != 1
+        || !buffer.is_c_contiguous()
+        || buffer.format().to_bytes() != b"?"
+        || buffer.item_size() != 1
+    {
+        return None;
+    }
+    // SAFETY: the item size is 1 byte, matching `u8`'s size and
+    // alignment, and the buffer was just checked to be C-contiguous.
+    Some(unsafe { PinnedSlice::new(buffer) })
+}
+
+/// Legacy mask conversion: duck-typed validation plus a `tolist()`
+/// round-trip that boxes every element under the GIL. Kept only as the
+/// back-compat fallback for objects that quack like a 1D bool ndarray
+/// without exporting a bool-format buffer; NumPy bool arrays are
+/// handled zero-copy by [`mask_pinned_bytes`].
 fn mask_1d(mask: &Bound<'_, PyAny>, expected_len: usize) -> PyResult<Vec<bool>> {
     let message = "mask must be a 1D C-contiguous NumPy array with dtype bool";
     let ndim: usize = mask
@@ -766,15 +951,26 @@ fn mask_1d(mask: &Bound<'_, PyAny>, expected_len: usize) -> PyResult<Vec<bool>> 
     Ok(values)
 }
 
-fn mask_candidates(mask: &[bool]) -> Result<Vec<u32>, DenseError> {
-    let mut candidates = Vec::new();
-    for (slot, allowed) in mask.iter().enumerate() {
-        if *allowed {
-            let slot = u32::try_from(slot).map_err(|_| DenseError::SlotIndexOverflow(slot))?;
-            candidates.push(slot);
-        }
+/// Pin a 1D C-contiguous uint64 buffer for zero-copy reads.
+///
+/// Unlike [`ids_1d`] this never copies: the returned pin lets the
+/// search path read the ids directly from the NumPy buffer after the
+/// GIL has been released. Validation order and error messages match
+/// the copying path.
+fn pinned_ids_1d(ids: &Bound<'_, PyAny>, name: &str) -> PyResult<PinnedSlice<u64>> {
+    let buffer = PyUntypedBuffer::get(ids).map_err(|_| u64_dtype_err(name))?;
+    if buffer.as_typed::<u64>().is_err() {
+        return Err(u64_dtype_err(name));
     }
-    Ok(candidates)
+    if buffer.dimensions() != 1 {
+        return Err(value_err(format!("{name} must be a 1D NumPy array")));
+    }
+    if !buffer.is_c_contiguous() {
+        return Err(contiguous_err(name));
+    }
+    // SAFETY: `as_typed::<u64>` verified element format, item size, and
+    // alignment for `u64`, and C-contiguity was checked above.
+    Ok(unsafe { PinnedSlice::new(buffer) })
 }
 
 fn f32_buffer(obj: &Bound<'_, PyAny>, name: &str) -> PyResult<PyBuffer<f32>> {
@@ -786,11 +982,13 @@ fn f32_buffer(obj: &Bound<'_, PyAny>, name: &str) -> PyResult<PyBuffer<f32>> {
 }
 
 fn u64_buffer(obj: &Bound<'_, PyAny>, name: &str) -> PyResult<PyBuffer<u64>> {
-    PyBuffer::get(obj).map_err(|_| {
-        value_err(format!(
-            "{name} must be a C-contiguous NumPy array with dtype uint64"
-        ))
-    })
+    PyBuffer::get(obj).map_err(|_| u64_dtype_err(name))
+}
+
+fn u64_dtype_err(name: &str) -> PyErr {
+    value_err(format!(
+        "{name} must be a C-contiguous NumPy array with dtype uint64"
+    ))
 }
 
 fn require_2d<T: Element>(buffer: &PyBuffer<T>, name: &str) -> PyResult<()> {
