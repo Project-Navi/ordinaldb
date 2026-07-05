@@ -25,9 +25,10 @@ fraction of the raw-float footprint, with no daemon and no separate index
 build step. The 100,000-row planning figure below is scoped to the
 adapter-directory path only.
 
-- **Recall:** top-k row ids are bit-identical to an exact fp32 cosine
-  brute-force baseline on the measured query sets. There is no
-  recall/ef/nprobe knob to get wrong.
+- **No recall knob.** There is no `ef`, `nprobe`, or recall dial to tune.
+  Retrieval quality is measured as nDCG@10 against exact dense on the public
+  BEIR harness (see the README), not as exact-neighbor geometry; the numbers
+  here are size and latency limits, not a recall benchmark.
 - **Verification limits:** resource limits are manifest-derived — each
   auxiliary artifact read is bounded by its own manifest-declared,
   SHA-256-pinned size — so bundles with large sign sidecars open with

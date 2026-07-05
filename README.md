@@ -3,7 +3,7 @@
 [![CI](https://github.com/Project-Navi/ordinaldb/actions/workflows/ci.yml/badge.svg)](https://github.com/Project-Navi/ordinaldb/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-**Vector search you can ship as a single verifiable file.**
+**Vector search you can ship as a single verifiable bundle.**
 
 OrdinalDB is a training-free, tamper-evident, embedded vector database. Bring
 your own embeddings, index the very first vector with zero prior data, and
@@ -45,7 +45,7 @@ BLAS, no learned codebook, no ANN graph — and no recall knob to get wrong.
 
 ## Scale, Measured
 
-The core index holds **1M+ rows in a single verifiable file**. At 2 bits per
+The core index holds **1M+ rows in a single verifiable bundle**. At 2 bits per
 dimension the committed 100K-row benchmark writes a ~2.4 MB index for vectors
 that occupy 25.6 MB as raw fp32 — about 10× smaller — with a verified cold
 open in ~5 ms ([`docs/limits.md`](docs/limits.md)).
