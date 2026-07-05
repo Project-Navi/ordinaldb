@@ -78,13 +78,12 @@ dialect (comparison and logical operators, including nesting) via
 `AND`/`OR`/`NOT`. In every adapter, a filter is resolved to a pre-search
 allowlist of matching records before the vector search runs, so filtered
 results are the top-k **within that allowlist**, not a global top-k filtered
-afterward. See the root [`README.md`](../README.md#filter-dialects) for the
-per-adapter matrix.
+afterward. Each adapter's supported operators are documented in its own
+module.
 
 Rust sparse/hybrid retrieval lives in the `ordinaldb-hybrid` crate: BM25 mmap
-auxiliaries, allowlist-aware sparse search, RRF fusion, and gated LTR support.
-None of this is exposed through the Python bindings yet — see
-[Hybrid Search And LTR Feature Flags](#hybrid-search-and-ltr-feature-flags)
+auxiliaries, allowlist-aware sparse search, and RRF fusion. None of this is
+exposed through the Python bindings yet — see [Hybrid Search](#hybrid-search)
 below.
 
 Adapter dimensions follow the core RankQuant constraints: `bits=1` requires
@@ -107,54 +106,22 @@ errors with Python's standard `warnings` filters:
 | `UnsavedWritesWarning` | The first unsaved write of each epoch to a path-bound store. Adapter mutations only touch memory until an explicit save (LangChain `save_local()`/`persist()`, LlamaIndex `persist()`, Agno `create()`/`save()`, `AdapterStore.save()`); a successful save re-arms the warning for the next unsaved batch. |
 | `UnknownFilterKeyWarning` | A metadata filter matches zero records *and* names at least one key that no stored record carries — usually a typo (`doctype` vs `doc_type`). The warning names the unknown key(s). |
 
-## Hybrid Search And LTR Feature Flags
+## Hybrid Search
 
-`ordinaldb-hybrid` and `ordinaldb-ltr` are real, tested Rust crates, but they
-are experimental and off by default:
+`ordinaldb-hybrid` is a real, tested Rust crate, but hybrid retrieval is
+experimental and off by default:
 
 | Crate | Feature flag | Enables |
 | --- | --- | --- |
 | `ordinaldb` | `hybrid` | `ordinaldb::hybrid::*` — BM25 mmap index, allowlist-aware sparse search, RRF fusion |
-| `ordinaldb` | `experimental-ltr` (implies `hybrid`) | LTR reranking types under `ordinaldb::hybrid` (`ordinaldb-hybrid`'s own `ltr` feature) |
-| `ordinaldb-hybrid` | `ltr` | LTR-specific types within `ordinaldb-hybrid` itself |
-| `ordinaldb-cli` | `experimental-ltr` | `ordinaldb ltr features/train/attach/inspect` subcommands |
-| `ordinaldb-cli` | `experimental-ltr-local-train` (implies `experimental-ltr`) | local LTR training extras |
 
 Status:
 
-- Not exposed through the Python bindings (`ordinaldb-python`) yet — Rust
-  only.
-- **Serving-side LTR is implemented and tested**: `TreeEnsembleReranker`,
-  `LtrFeatureBatch`, `rerank_fused_batch`, and the `ordinaldb-ltr`
-  feature-cache write/read paths.
-- **No training path exists anywhere in OrdinalDB.** `ordinaldb ltr train`,
-  `ordinaldb ltr attach`, and `ordinaldb ltr inspect` are stubs that return
-  a "not implemented yet" error rather than a silent no-op. Users bring an
-  external trainer and must convert its output to `LtrTreeEnsembleRecord`'s
-  JSON format themselves; the model header currently requires
-  `training_objective` `"rank:pairwise"` and `booster` `"gbtree"`.
-- `ordinaldb ltr features` (export a grouped feature cache from a verified
-  bundle) is implemented and exports exactly the feature triple
-  `[bm25_score, bm25_rank, query_len_chars]` — no dense or fused features
-  yet.
-- **`LtrFeatureBatch::from_inputs` requires an explicit score in every
-  configured source for every fused row.** A candidate found by only one
-  retrieval mode (the normal hybrid case) has no entry in the other mode's
-  `RankedBatch`, and feature building errors on the first gap instead of
-  substituting a sentinel. Workaround: backfill scores by running each side
-  with a `top_k` large enough (up to the corpus size) that every fused
-  candidate is covered, separate from the smaller `top_k` used for
-  user-facing results. This coverage requirement (and the hardcoded model
-  header above) is a documented 0.2.0 limitation, slated for a later
-  release, not fixed here.
-- `ordinaldb verify` structurally opens recognized hybrid/LTR sidecars
-  (`ordinaldb.sparse_bm25`, `ordinaldb.ltr_model`, `ordinaldb.ltr_features`)
-  through their domain loaders when built with `--features experimental-ltr`;
-  without that feature it still checks manifest checksums and reports a
-  warning that those sidecars were not structurally validated.
-- See the root [`README.md`](../README.md#hybrid-search-and-ltr-experimental)
-  for a narrative overview, the `ordinaldb-hybrid` crate-level rustdoc for a
-  compile-tested sparse-sidecar + RRF example, and
-  `examples/downstream-smoke/src/main.rs` for a working `--features hybrid`
-  walkthrough (build/write a verified bundle with a BM25 sidecar, then dense
-  search, sparse search, and RRF fuse the two).
+- Experimental and Rust-only — not exposed through the Python bindings
+  (`ordinaldb-python`) yet.
+- `ordinaldb verify` checks manifest checksums for recognized hybrid sidecars.
+- See the root [`README.md`](../README.md) for a narrative overview, the
+  `ordinaldb-hybrid` crate-level rustdoc for a compile-tested sparse-sidecar +
+  RRF example, and `examples/downstream-smoke/src/main.rs` for a working
+  `--features hybrid` walkthrough (build a verified bundle with a BM25 sidecar,
+  then dense search, sparse search, and RRF fuse the two).
