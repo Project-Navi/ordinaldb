@@ -1257,6 +1257,38 @@ fn ensure_writable_regular_path(path: &Path) -> Result<()> {
 }
 
 fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
+    // Retry transient PermissionDenied: on Windows, a virus scanner or the
+    // search indexer briefly locks a just-created file, so the temp-file
+    // open or the atomic rename can fail with ERROR_ACCESS_DENIED even for a
+    // path this process owns. A bounded backoff clears the race without
+    // masking a genuine permission error (which persists across all
+    // attempts). Benign elsewhere — Linux/macOS do not produce this race.
+    const ATOMIC_WRITE_ATTEMPTS: u32 = 10;
+    let mut attempt = 0;
+    loop {
+        match atomic_write_once(path, bytes) {
+            Ok(()) => return Ok(()),
+            Err(error)
+                if is_transient_access_denied(&error) && attempt + 1 < ATOMIC_WRITE_ATTEMPTS =>
+            {
+                attempt += 1;
+                std::thread::sleep(std::time::Duration::from_millis(5 * u64::from(attempt)));
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
+/// True for a retryable Windows file-lock race (ERROR_ACCESS_DENIED from a
+/// scanner/indexer), false for anything else.
+fn is_transient_access_denied(error: &HybridError) -> bool {
+    matches!(
+        error,
+        HybridError::Io(io_err) if io_err.kind() == io::ErrorKind::PermissionDenied
+    )
+}
+
+fn atomic_write_once(path: &Path, bytes: &[u8]) -> Result<()> {
     let parent = path
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
