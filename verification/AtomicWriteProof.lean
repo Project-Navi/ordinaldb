@@ -26,7 +26,6 @@
   `Correspondence` comments throughout.
 -/
 
-import Mathlib.Data.Finset.Basic
 import Mathlib.Data.Option.Basic
 import Mathlib.Logic.Basic
 
@@ -239,25 +238,80 @@ lemma update_other (fs : Filesystem) (p q : Path) (s : Option BundleState) (h : 
 lemma update_same (fs : Filesystem) (p : Path) (s t : Option BundleState) :
     (fs[p ↦ s][p ↦ t]) = (fs[p ↦ t]) := by
   funext q
-  simp [Filesystem.update]
-  split_ifs with h <;> simp
+  simp only [Filesystem.update]
+  by_cases h : q = p <;> simp [h]
 
-/-- Helper: `verify_written` on a Verified temp produces a Verified temp. -/
+/-- Helper: `Filesystem.update` at the updated path returns the new value. -/
+lemma update_self (fs : Filesystem) (p : Path) (s : Option BundleState) :
+    (fs[p ↦ s]) p = s := by
+  simp [Filesystem.update]
+
+/-- Helper: `verify_written` on a Verified temp produces a Verified temp.
+When `temp` is already Verified, `verify_written` is idempotent (`.ok fs`), and
+since `fs temp = some .Verified` the update `fs[temp ↦ some .Verified]` equals
+`fs`, so the left disjunct still holds. -/
 lemma verify_written_verified (fs : Filesystem) (temp : Path) :
     verify_written fs temp = .ok (fs[temp ↦ some .Verified]) ∨
     verify_written fs temp = .err := by
   unfold verify_written
   match h : fs temp with
   | none             => exact Or.inr rfl
-  | some .Unverified => simp [h]; exact Or.inl rfl
+  | some .Unverified => simp
   | some .Verified   =>
-    simp [h]
-    left
-    funext q
-    simp [Filesystem.update]
-    split_ifs with heq
-    · rw [← heq]; exact h.symm
-    · rfl
+    have hfix : fs[temp ↦ some .Verified] = fs := by
+      funext q
+      simp only [Filesystem.update]
+      by_cases heq : q = temp
+      · rw [if_pos heq, heq]; exact h.symm
+      · rw [if_neg heq]
+    simp [hfix]
+
+/-- Helper: the `success` flag returned by `replace_bundle` is exactly the
+`rename_B_succeeds` input — the true/false branches set it to `true`/`false`
+respectively, independent of the backup bookkeeping. -/
+lemma replace_bundle_success (fs : Filesystem) (path temp : Path) (r : Bool) :
+    (replace_bundle fs path temp r).success = r := by
+  unfold replace_bundle
+  cases hfp : fs path <;> cases r <;> simp
+
+/-- Helper: on a successful rename (`rename_B_succeeds = true`), the canonical
+`path` ends up holding whatever content `temp` had, regardless of whether `path`
+previously existed. Requires `path ≠ temp` and `path + 1 ≠ temp` (temp is neither
+the destination nor the backup schematic). -/
+lemma replace_bundle_true_path
+    (fs : Filesystem) (path temp : Path)
+    (hd : path ≠ temp) (hbt : path + 1 ≠ temp) :
+    (replace_bundle fs path temp true).fs path = fs temp := by
+  unfold replace_bundle
+  rcases fs path with _ | c <;>
+    simp [Filesystem.update, hd, Ne.symm hd, Ne.symm hbt]
+
+/-- Helper: on a failed rename (`rename_B_succeeds = false`) when `path`
+previously existed with content `c`, the best-effort restore returns `path` to
+that original content. Uses that the backup schematic `path + 1` is distinct
+from `path`. -/
+lemma replace_bundle_false_restores
+    (fs : Filesystem) (path temp : Path) (c : BundleState)
+    (hfp : fs path = some c) :
+    (replace_bundle fs path temp false).fs path = some c := by
+  unfold replace_bundle
+  simp [hfp, Filesystem.update]
+
+/-- Helper: the full `write_bundle_protocol` always completes its four
+preliminary steps (each succeeds by construction: `mk_temp` creates `temp`, and
+`write_contents`/`verify_written`/`fsync_tree` all see a live `temp`), then
+returns the result of `replace_bundle` applied to the state in which `temp` has
+been verified. -/
+lemma write_bundle_protocol_eq (fs : Filesystem) (path temp : Path) (r : Bool) :
+    write_bundle_protocol fs path temp r
+      = .ok ((replace_bundle
+              (fs[temp ↦ some .Unverified][temp ↦ some .Unverified][temp ↦ some .Verified])
+              path temp r).fs,
+             (replace_bundle
+              (fs[temp ↦ some .Unverified][temp ↦ some .Unverified][temp ↦ some .Verified])
+              path temp r).success) := by
+  unfold write_bundle_protocol mk_temp write_contents verify_written fsync_tree
+  simp [Filesystem.update]
 
 /-!
 ## Section 6: Main Theorems
@@ -267,16 +321,21 @@ lemma verify_written_verified (fs : Filesystem) (temp : Path) :
 If `write_bundle_protocol` fails (returns `.err`), the canonical `path` is
 not changed from its original value in `fs`.
 
-The proof proceeds by case analysis: `.err` can only arise from `mk_temp`,
-`write_contents`, `verify_written`, or `fsync_tree`. In each case, `path`
-is never touched. The `replace_bundle` step is never reached.
+INTENTIONALLY WEAK SCAFFOLDING: this statement produces the *original* `fs` as
+its own witness, so it only asserts `fs path = fs path`. It cannot observe the
+(hypothetical) intermediate state on an error path because the model returns no
+filesystem on `.err`. The substantive guarantee — that `path` is only ever
+mutated inside `replace_bundle`, never by the four preliminary steps — is
+carried by `write_bundle_path_invariant` (Section 7) via
+`write_bundle_protocol_eq`, which shows the preliminary steps only touch `temp`.
+The `hd` precondition is unused here and kept only for signature parity.
 -/
 
 theorem write_bundle_no_partial_publish
     (fs : Filesystem)
     (path temp : Path)
     (rename_B_succeeds : Bool)
-    (hd : paths_distinct path temp) :
+    (_hd : paths_distinct path temp) :
     write_bundle_protocol fs path temp rename_B_succeeds = .err →
     (∃ (fs' : Filesystem),
       write_bundle_protocol fs path temp rename_B_succeeds = .err ∧
@@ -307,40 +366,35 @@ This is the key safety theorem: the canonical path, if updated, holds a
 Verified bundle — meaning `verify_for_load` ran and passed before the rename.
 -/
 
-/-- Precondition: temp is distinct from path and the backup schematic. -/
+/-- Precondition: temp is distinct from path and the backup schematic.
+
+Stated as a robust *property* rather than an exact-final-state `rfl`: whenever
+the full protocol with `rename_B_succeeds = true` returns a filesystem `fs'`, the
+canonical `path` holds `some .Verified`. This matches `replace_bundle`'s actual
+behavior — on a successful rename, `path` receives the content `temp` held after
+`verify_written` (which is `some .Verified`), keyed on `fs temp` (not on the old
+`fs path`, as the earlier exact-state formulation mistakenly assumed).
+
+Correspondence: in Rust this is the `Ok(())` arm of the final `rename(temp, path)`
+in `replace_bundle` — the destination now holds the verified temp bundle. -/
 theorem write_bundle_path_is_verified_on_success
     (fs : Filesystem)
     (path temp : Path)
     (hd : paths_distinct path temp)
-    (hbd : backup_distinct path temp) :
-    write_bundle_protocol fs path temp true = .ok (
-      -- The final filesystem after a successful write:
-      -- path holds the verified content, temp and backup are gone.
-      let fs1 := fs[temp ↦ some .Unverified]
-      let fs2 := fs1[temp ↦ some .Unverified]   -- write_contents: no change
-      let fs3 := fs2[temp ↦ some .Verified]      -- verify_written upgrades
-      let fs4 := fs3                              -- fsync: no state change
-      -- replace_bundle with rename_B_succeeds = true:
-      -- backup step: if original path existed, it moves to path+1
-      -- then temp moves to path, backup removed.
-      -- We prove the path slot is Verified.
-      let backup_content := fs temp
-      let fs5 : Filesystem := match backup_content with
-        | none   => fs4
-        | some c => fs4[path ↦ none][path + 1 ↦ some c]
-      let temp_content := fs5 temp   -- = some .Verified
-      let fs6 := fs5[path ↦ temp_content][temp ↦ none]
-      let fs7 := fs6[path + 1 ↦ none]
-      fs7, true) := by
-  unfold write_bundle_protocol mk_temp write_contents verify_written fsync_tree replace_bundle
-  simp [paths_distinct] at hd
-  simp [backup_distinct] at hbd
-  -- All four preliminary steps succeed by construction of their .ok branches.
-  -- After verify_written, temp = some .Verified.
-  -- replace_bundle with rename_B_succeeds = true puts that content at path.
-  simp [Filesystem.update, hd, hbd]
-  -- The concrete filesystem manipulation is definitionally equal.
-  rfl
+    (hbd : backup_distinct path temp)
+    (fs' : Filesystem) (b : Bool)
+    (h : write_bundle_protocol fs path temp true = .ok (fs', b)) :
+    fs' path = some .Verified := by
+  simp only [paths_distinct] at hd
+  have hb2 : path + 1 ≠ temp := hbd.2
+  rw [write_bundle_protocol_eq] at h
+  simp only [OpResult.ok.injEq, Prod.mk.injEq] at h
+  obtain ⟨hfs, -⟩ := h
+  rw [← hfs,
+      replace_bundle_true_path
+        (fs[temp ↦ some .Unverified][temp ↦ some .Unverified][temp ↦ some .Verified])
+        path temp hd hb2]
+  exact update_self _ _ _
 
 /-!
 ### Theorem 3: Restore on Rename Failure (Precondition: Path Existed)
@@ -371,33 +425,20 @@ theorem replace_bundle_restores_on_rename_failure
     (path temp : Path)
     (c : BundleState)
     (hd : paths_distinct path temp)
-    (hbd : backup_distinct path temp)
+    (_hbd : backup_distinct path temp)
     (hpath : fs path = some c) :
-    -- After mk_temp + write + verify + fsync, fs4 has temp = Verified and path = some c
-    -- (the preliminary steps don't touch path).
-    -- replace_bundle with rename_B_succeeds = false restores path.
-    let fs1 := fs[temp ↦ some .Unverified]
-    let fs3 := fs1[temp ↦ some .Verified]
-    -- path + 1 is the backup path; path ≠ path+1 by hbd
-    let fs4 := fs3
-    (replace_bundle fs4 path temp false).fs path = some c := by
-  simp [paths_distinct] at hd
-  simp [backup_distinct] at hbd
-  unfold replace_bundle
-  simp [Filesystem.update, hd, hbd]
-  -- fs4 path = fs path = some c (preliminary steps don't touch path)
-  -- backup_content = some c (path existed)
-  -- rename_B_succeeds = false → step C: restore from backup to path
-  -- fs1 path = fs path since temp ≠ path
-  have hpath1 : (fs[temp ↦ some .Unverified]) path = some c := by
-    simp [Filesystem.update, Ne.symm hd, hpath]
-  have hpath3 : (fs[temp ↦ some .Unverified][temp ↦ some .Verified]) path = some c := by
-    simp [Filesystem.update, Ne.symm hd, hpath]
-  -- After backup (move path → path+1), path = none, path+1 = some c
-  -- After failed rename, path still none → restore: path gets backup = some c
-  simp [Filesystem.update, hpath3, Ne.symm hd]
-  -- The restore branch sets path to some c unconditionally (since path is none after backup)
-  simp [hpath3]
+    -- After mk_temp + write + verify + fsync, the temp-verified state
+    -- `fs[temp ↦ .Unverified][temp ↦ .Verified]` (call it `fs4`) still has
+    -- `path = some c`, since the preliminary steps never touch `path`.
+    -- `replace_bundle` with `rename_B_succeeds = false` then restores `path`
+    -- from the backup it created in step A.
+    (replace_bundle (fs[temp ↦ some .Unverified][temp ↦ some .Verified]) path temp false).fs path
+      = some c := by
+  simp only [paths_distinct] at hd
+  -- The preliminary (temp-only) updates leave `path` at its original content.
+  have hfs4 : (fs[temp ↦ some .Unverified][temp ↦ some .Verified]) path = some c := by
+    rw [update_other _ _ _ _ hd, update_other _ _ _ _ hd, hpath]
+  exact replace_bundle_false_restores _ path temp c hfs4
 
 /-!
 ### Theorem 4: `verify_written` is the Gatekeeper — Content Before Rename is Always Verified
@@ -409,28 +450,25 @@ step that transitions `temp` from `Unverified` to `Verified`.
 This means: the content that `rename_B_succeeds = true` moves to `path` is
 always a bundle that passed `verify_for_load`.
 
-(This theorem captures the key security invariant: the canonical path never
-holds Unverified content after a successful write.)
--/
+INTENTIONALLY WEAK SCAFFOLDING: as stated this is an unconditional existential
+(`∃ fs_pre, fs_pre temp = some .Verified`), which is trivially witnessed and does
+not depend on the hypotheses. The substantive "gatekeeper" content — that the
+state actually handed to `replace_bundle` has `temp = some .Verified` — is
+`write_bundle_protocol_eq` (the replace argument is
+`fs[temp ↦ .Unverified][temp ↦ .Unverified][temp ↦ .Verified]`) combined with
+`update_self`; its path-level consequence is `write_bundle_path_invariant`.
+Making this theorem itself non-trivial would require threading the intermediate
+state through the model's return type (a model change), so it is left as-is. -/
 
 theorem verified_temp_before_replace
     (fs : Filesystem)
     (path temp : Path)
-    (hd : paths_distinct path temp)
+    (_hd : paths_distinct path temp)
     (fs' : Filesystem)
-    (h : write_bundle_protocol fs path temp true = .ok (fs', true)) :
-    -- There exists an intermediate state where temp was Verified before the rename.
-    -- We prove this by showing the protocol can only reach replace_bundle
-    -- if verify_written returned .ok, which sets temp to Verified.
-    ∃ (fs_pre : Filesystem), fs_pre temp = some .Verified := by
-  -- The protocol structure guarantees: to reach replace_bundle, verify_written
-  -- must have returned .ok, which sets temp = some .Verified.
-  unfold write_bundle_protocol mk_temp write_contents verify_written fsync_tree at h
-  -- After successful steps, extract the intermediate state.
-  simp [Filesystem.update] at h
-  -- The intermediate state after verify_written has temp = some .Verified.
-  refine ⟨fs[temp ↦ some .Verified], ?_⟩
-  simp [Filesystem.update]
+    (_h : write_bundle_protocol fs path temp true = .ok (fs', true)) :
+    ∃ (fs_pre : Filesystem), fs_pre temp = some .Verified :=
+  -- Witnessed by the very state `write_bundle_protocol_eq` feeds to `replace_bundle`.
+  ⟨fs[temp ↦ some .Verified], update_self _ _ _⟩
 
 /-!
 ## Section 7: Composition — The Full Safety Statement
@@ -458,25 +496,25 @@ theorem write_bundle_path_invariant
       -- observe the intermediate fs, so we state the visible invariant:
       -- the return value gives no Verified content at path via a success branch.
       True) := by
-  match h : write_bundle_protocol fs path temp rename_B_succeeds with
-  | .err => exact Or.inr ⟨h, trivial⟩
-  | .ok (fs', b) =>
-    apply Or.inl
-    intro fs'' b'' heq hb
-    -- heq : .ok (fs', b) = .ok (fs'', b'') so fs' = fs'' and b = b''
-    have hfeq : fs' = fs'' ∧ b = b'' := by
-      cases heq; exact ⟨rfl, rfl⟩
-    rw [← hfeq.1, ← hfeq.2] at hb ⊢
-    -- From write_bundle_protocol structure: success means verify_written passed.
-    -- We show fs' path = some .Verified by unfolding.
-    unfold write_bundle_protocol mk_temp write_contents verify_written
-         fsync_tree replace_bundle at h
-    simp [Filesystem.update, hd, hbd, hb] at h ⊢
-    -- After successful protocol with rename_B_succeeds:
-    -- replace_bundle puts temp content (= Verified) at path.
-    simp [paths_distinct] at hd
-    simp [Filesystem.update, Ne.symm hd] at h ⊢
-    split at h <;> simp_all [Filesystem.update]
+  -- The abstract protocol never errors (all four steps succeed by construction),
+  -- so we always establish the left disjunct: on a successful rename the
+  -- canonical `path` holds Verified content.
+  simp only [paths_distinct] at hd
+  have hb2 : path + 1 ≠ temp := hbd.2
+  apply Or.inl
+  intro fs' b heq hbtrue
+  rw [write_bundle_protocol_eq] at heq
+  simp only [OpResult.ok.injEq, Prod.mk.injEq] at heq
+  obtain ⟨hfs, hsucc⟩ := heq
+  -- `b = rename_B_succeeds`, and `b = true`, so the rename succeeded.
+  rw [replace_bundle_success] at hsucc
+  rw [hbtrue] at hsucc
+  subst hsucc
+  rw [← hfs,
+      replace_bundle_true_path
+        (fs[temp ↦ some .Unverified][temp ↦ some .Unverified][temp ↦ some .Verified])
+        path temp hd hb2]
+  exact update_self _ _ _
 
 /-!
 ## Section 8: Notes on Model Boundaries

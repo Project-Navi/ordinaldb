@@ -21,10 +21,23 @@ content, and is restored from backup if the final rename fails.
 - OS `rename(2)` atomicity, SHA-256 collision-resistance, fsync durability,
   concurrent-writer exclusion, and the verify↔rename TOCTOU window are **explicit
   documented assumptions**, not theorems (Section 8).
-- `write_bundle_no_partial_publish` is intentionally weak (a tautological witness).
-  The load-bearing results are Theorems 2 and 3 and `write_bundle_path_invariant`.
-- **Machine-check status:** being built against Lean 4 + Mathlib. Until that is
-  confirmed green, treat this as a *reviewed draft*, not a checked proof.
+- `write_bundle_no_partial_publish` and `verified_temp_before_replace` are
+  intentionally weak scaffolding (a tautological witness and an unconditional
+  existential), marked as such in the file. The load-bearing safety results are
+  `write_bundle_path_is_verified_on_success` (a successful write leaves the canonical
+  path holding `Verified` content), `replace_bundle_restores_on_rename_failure` (the
+  path is restored from backup on a failed rename), and `write_bundle_path_invariant`
+  (the composed either/or).
+- **Machine-check status: CLEAN.** Verified with **Lean 4.28.0 + Mathlib v4.28.0**
+  (`lake build` → 0 errors; `#print axioms` on every declaration shows only Lean's
+  foundational axioms — `propext`, `Quot.sound`, `Classical.choice` — and no
+  `sorryAx`).
+- **Repaired on incorporation (honest note):** the contributed version did **not**
+  compile — three substantive theorems had broken proofs and
+  `write_bundle_path_is_verified_on_success` was *mis-stated* (it keyed the backup on
+  `fs temp` where `replace_bundle` keys it on `fs path`). These were corrected (the
+  mis-stated theorem restated as the property `success ⇒ path = Verified`) so the file
+  now checks; imports trimmed to `Option.Basic` + `Logic.Basic`.
 
 To check it locally: install the toolchain with `elan`, create a Lake project that
 depends on Mathlib (`lake exe cache get`), drop this file in, and `lake build`.
@@ -41,6 +54,8 @@ before `ordinaldb-trust` is implemented**; they are not yet reflected in the spe
 ## Provenance
 
 Both artifacts are AI-assisted contributions (Perplexity), reviewed and incorporated
-here with the scope and status stated above — deliberately not presented as
-established guarantees until the Lean file machine-checks and the audit's findings
-are folded into the spec.
+here with the scope and status stated above. The Lean file's proofs were **broken as
+received** (three theorems failed to typecheck, one was mis-stated) and had to be
+repaired to compile — a concrete reminder that AI-generated proofs are *verified, not
+trusted*. The audit's findings are accurate to the current code but are not yet folded
+into the spec.
