@@ -11,3 +11,11 @@ publish = false
 # Run from this directory: `cargo run --release`.
 [dependencies]
 ordinaldb = { path = "../../ordinaldb", features = ["hybrid"] }
+
+# Pre-publish only: this workspace-excluded example has its own lockfile and
+# does not inherit the root [patch.crates-io], so it must mirror it to build
+# ordinaldb's ordvec 0.6.0 requirement against the integration heads until
+# ordvec 0.6.0 publishes to crates.io. Removed with the root patch at publish.
+[patch.crates-io]
+ordvec = { git = "https://github.com/Project-Navi/ordvec", branch = "integration/full-stack" }
+ordvec-manifest = { git = "https://github.com/Project-Navi/ordvec", branch = "integration/full-stack" }
