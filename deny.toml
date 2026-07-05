@@ -31,4 +31,8 @@ skip-tree = []
 unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
-allow-git = []
+# Pre-publish only: the workspace root [patch.crates-io] points ordvec +
+# ordvec-manifest at the 0.6.0 integration branch until they publish to
+# crates.io. Removed with the patch block at publish (the release packaging
+# script fails on any git source in Cargo.lock — see RELEASING.md).
+allow-git = ["https://github.com/Project-Navi/ordvec"]
