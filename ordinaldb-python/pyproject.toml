@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT OR Apache-2.0" }
 authors = [
-    { name = "OrdinalDB contributors" },
+    { name = "Nelson Spence" },
 ]
 keywords = [
     "vector-search",
