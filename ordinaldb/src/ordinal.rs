@@ -44,8 +44,6 @@ pub struct OrdinalIndex {
     inner: Option<RankQuant>,
     sign: Option<SignBitmap>,
     sign_enabled: bool,
-    vectors: Vec<f32>,
-    raw_vectors_complete: bool,
 }
 
 /// Options controlling how a new index is built.
@@ -342,8 +340,6 @@ impl OrdinalIndex {
             inner: Some(RankQuant::new(dim, bits)),
             sign: maybe_new_sign(dim, bits, options.sign),
             sign_enabled: options.sign,
-            vectors: Vec::new(),
-            raw_vectors_complete: true,
         })
     }
 
@@ -363,8 +359,6 @@ impl OrdinalIndex {
             inner: None,
             sign: None,
             sign_enabled: true,
-            vectors: Vec::new(),
-            raw_vectors_complete: true,
         })
     }
 
@@ -435,9 +429,6 @@ impl OrdinalIndex {
         if let Some(sign) = &mut self.sign {
             sign.add(vectors);
         }
-        if self.raw_vectors_complete {
-            self.vectors.extend_from_slice(vectors);
-        }
     }
 
     /// Append row-major vectors, checking (and, for a lazy index,
@@ -494,9 +485,6 @@ impl OrdinalIndex {
             .add(vectors);
         if let Some(sign) = &mut self.sign {
             sign.add(vectors);
-        }
-        if self.raw_vectors_complete {
-            self.vectors.extend_from_slice(vectors);
         }
         Ok(())
     }
@@ -1036,22 +1024,17 @@ impl OrdinalIndex {
     /// Panics if the index is still lazy (no `dim` established) — there is
     /// nothing to remove.
     pub fn swap_remove(&mut self, idx: usize) -> usize {
-        let dim = self
-            .dim
-            .expect("cannot remove from a lazy uncommitted OrdinalIndex");
-        let len = self.len();
+        assert!(
+            self.dim.is_some(),
+            "cannot remove from a lazy uncommitted OrdinalIndex"
+        );
         let moved_from = self
             .inner
             .as_mut()
             .expect("cannot remove from a lazy uncommitted OrdinalIndex")
             .swap_remove(idx);
-        if self.raw_vectors_complete {
-            swap_remove_vector(&mut self.vectors, dim, idx, len);
-            self.rebuild_sign();
-        } else if let Some(sign) = &mut self.sign {
+        if let Some(sign) = &mut self.sign {
             sign.swap_remove(idx);
-        } else {
-            self.vectors.clear();
         }
         moved_from
     }
@@ -1199,8 +1182,6 @@ impl OrdinalIndex {
             inner: Some(rankquant),
             sign,
             sign_enabled: true,
-            vectors: Vec::new(),
-            raw_vectors_complete: false,
         })
     }
 
@@ -1214,21 +1195,6 @@ impl OrdinalIndex {
             has_sign: self.sign.is_some(),
             has_ids,
         }
-    }
-
-    fn rebuild_sign(&mut self) {
-        let Some(dim) = self.dim else {
-            self.sign = None;
-            return;
-        };
-        let Some(mut sign) = maybe_new_sign(dim, self.bits, self.sign_enabled) else {
-            self.sign = None;
-            return;
-        };
-        if !self.vectors.is_empty() {
-            sign.add(&self.vectors);
-        }
-        self.sign = Some(sign);
     }
 }
 
@@ -1294,6 +1260,19 @@ fn validate_add_dim_bits(dim: usize, bits: u8) -> Result<(), AddError> {
 }
 
 fn first_invalid_coord(values: &[f32], dim: usize) -> Option<(usize, usize, f32)> {
+    // Large ingest batches paid a full serial pass here (measured ~0.1s per
+    // GiB). Happy path: a parallel all-valid sweep. Only on failure does the
+    // serial scan run, preserving exact first-offender reporting.
+    const PARALLEL_THRESHOLD: usize = 1 << 20;
+    if values.len() >= PARALLEL_THRESHOLD {
+        let all_valid = values.par_chunks(1 << 18).all(|c| {
+            c.iter()
+                .all(|v| v.is_finite() && v.abs() < MAX_INPUT_MAGNITUDE)
+        });
+        if all_valid {
+            return None;
+        }
+    }
     values.iter().enumerate().find_map(|(i, value)| {
         if !value.is_finite() || value.abs() >= MAX_INPUT_MAGNITUDE {
             Some((i / dim, i % dim, *value))
@@ -1521,22 +1500,43 @@ fn two_stage_query_chunk_rows(n_vectors: usize, nq: usize) -> usize {
     // core (any batch <= cells/M previously did exactly that). TILE_FLOOR
     // keeps each chunk's candidate scan shared across enough queries that
     // splitting never costs more corpus passes than the cores can absorb.
-    const TILE_FLOOR: usize = 32;
+    // 128, not 32: each chunk's candidate scan streams the full sign
+    // sidecar once, so queries-per-stream sets the DRAM demand. At 32 the
+    // aggregate stream rate ceilings batch throughput (~8.6k q/s at 1.26M x
+    // 1024, measured); 128 quarters the traffic and hands the limit to the
+    // per-core compute ceiling. The optimal floor is a hardware-specific
+    // bandwidth/core tradeoff — a wide pool on a cache-resident or
+    // high-bandwidth corpus is better served by a lower floor (more chunks,
+    // more cores busy), where a bandwidth-bound large corpus wants the
+    // higher floor. `ORDINALDB_TWO_STAGE_TILE_FLOOR` lets operators tune it
+    // for their hardware; unlike the manifest resource limits (a security
+    // policy that must stay explicit, not ambient) this is a pure
+    // performance knob whose worst case is suboptimal throughput, never a
+    // correctness or safety change.
+    let tile_floor = two_stage_tile_floor();
     let max_rows_by_cells = (TWO_STAGE_MAX_SCORE_CELLS / n_vectors).max(1);
     let target_rows = nq
         .div_ceil(rayon::current_num_threads().max(1))
-        .max(TILE_FLOOR);
+        .max(tile_floor);
     max_rows_by_cells.min(target_rows).clamp(1, nq)
 }
 
-fn swap_remove_vector(vectors: &mut Vec<f32>, dim: usize, idx: usize, len: usize) {
-    let last = len - 1;
-    if idx != last {
-        let src = last * dim;
-        let dst = idx * dim;
-        vectors.copy_within(src..src + dim, dst);
-    }
-    vectors.truncate(last * dim);
+/// The two-stage query-chunk tile floor: `ORDINALDB_TWO_STAGE_TILE_FLOOR`
+/// if set to a positive integer, else the measured default of 128. Read
+/// once; a wide Rayon pool on a non-bandwidth-bound corpus can lower it to
+/// keep more cores busy.
+fn two_stage_tile_floor() -> usize {
+    use std::sync::OnceLock;
+    static FLOOR: OnceLock<usize> = OnceLock::new();
+    *FLOOR.get_or_init(|| parse_tile_floor(std::env::var("ORDINALDB_TWO_STAGE_TILE_FLOOR").ok()))
+}
+
+/// Pure parse/clamp for the tile-floor env value: a positive integer wins,
+/// anything else (absent, non-numeric, zero) falls back to the default 128.
+fn parse_tile_floor(raw: Option<String>) -> usize {
+    raw.and_then(|v| v.trim().parse::<usize>().ok())
+        .filter(|&v| v >= 1)
+        .unwrap_or(128)
 }
 
 struct LoadedVerifiedBundle {
@@ -1728,7 +1728,7 @@ mod chunk_scheduler_tests {
     #[test]
     fn tile_floor_bounds_splitting() {
         let chunk = in_pool(16, || two_stage_query_chunk_rows(320, 512));
-        assert_eq!(chunk, 32);
+        assert_eq!(chunk, 128);
     }
 
     /// Single-threaded pools reproduce the legacy cells-cap behavior.
@@ -1736,6 +1736,16 @@ mod chunk_scheduler_tests {
     fn single_thread_keeps_legacy_chunking() {
         let chunk = in_pool(1, || two_stage_query_chunk_rows(320, 4096));
         assert_eq!(chunk, TWO_STAGE_MAX_SCORE_CELLS / 320);
+    }
+
+    #[test]
+    fn env_override_parse_is_clamped() {
+        assert_eq!(super::parse_tile_floor(Some("32".into())), 32);
+        assert_eq!(super::parse_tile_floor(Some("1".into())), 1);
+        assert_eq!(super::parse_tile_floor(Some(" 64 ".into())), 64);
+        assert_eq!(super::parse_tile_floor(Some("0".into())), 128);
+        assert_eq!(super::parse_tile_floor(Some("bogus".into())), 128);
+        assert_eq!(super::parse_tile_floor(None), 128);
     }
 
     #[test]

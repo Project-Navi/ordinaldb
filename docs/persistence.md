@@ -66,9 +66,10 @@ prefer SSD or NVMe storage over microSD and use clean shutdowns.
   and OrdinalDB immediately opens the verified artifacts for layout validation.
   It still does not pin file descriptors against hostile post-verification
   mutation.
-- Fresh in-memory OrdinalDB indexes retain raw vectors so the sign stage can be
-  rebuilt after delete. Loaded indexes use the persisted `SignBitmap` sidecar's
-  `swap_remove` support to keep the two-stage path active after delete.
+- Raw vectors are never retained: fresh and loaded indexes alike maintain the
+  `SignBitmap` sidecar incrementally via its `swap_remove` support, keeping the
+  two-stage path active after delete at a memory footprint of codes + sidecar
+  only.
 
 Lazy indexes whose dimension has not been committed are not persisted. Calling
 `write` on an uncommitted lazy index returns `io::ErrorKind::InvalidInput`.

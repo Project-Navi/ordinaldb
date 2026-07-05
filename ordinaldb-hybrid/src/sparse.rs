@@ -2326,10 +2326,15 @@ mod tests {
         )
         .unwrap();
         write_manifest_file(&manifest, &manifest_path).unwrap();
-        assert!(verify_for_load(&manifest_path, VerifyOptions::default()).is_err());
+        // Derived limits (ordvec-manifest >= 0.6): default options bound
+        // reads by the manifest-declared size, so a large declared+pinned
+        // sidecar verifies without raising any knob...
+        assert!(verify_for_load(&manifest_path, VerifyOptions::default()).is_ok());
+        // ...while an explicitly configured tight cap remains an
+        // enforceable ceiling.
         let mut verify_options = VerifyOptions::default();
-        verify_options.limits.max_auxiliary_artifact_bytes = 2 * 1024 * 1024 * 1024;
-        assert!(verify_for_load(&manifest_path, verify_options).is_ok());
+        verify_options.limits.max_auxiliary_artifact_bytes = 1024;
+        assert!(verify_for_load(&manifest_path, verify_options).is_err());
     }
 
     #[test]
