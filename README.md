@@ -1,7 +1,7 @@
 # OrdinalDB
 
 [![CI](https://github.com/Project-Navi/ordinaldb/actions/workflows/ci.yml/badge.svg)](https://github.com/Project-Navi/ordinaldb/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![License: MIT OR Apache-2.0](https://img.shields.io/badge/License-MIT%20OR%20Apache--2.0-blue.svg)](#license)
 
 **Vector search you can ship as a single verifiable bundle.**
 
@@ -382,7 +382,7 @@ storage-hardening work.
 
 Project references:
 
-- [`LICENSE`](LICENSE)
+- [`LICENSE-MIT`](LICENSE-MIT), [`LICENSE-APACHE-2.0`](LICENSE-APACHE-2.0)
 - [`CONTRIBUTING.md`](CONTRIBUTING.md)
 - [`CHANGELOG.md`](CHANGELOG.md)
 - [`SECURITY.md`](SECURITY.md)
@@ -392,6 +392,21 @@ Project references:
 - [`docs/persistence.md`](docs/persistence.md)
 - [`docs/operations.md`](docs/operations.md)
 - [`docs/edge-deployment.md`](docs/edge-deployment.md)
+
+## License
+
+Licensed under either of
+
+- MIT License ([LICENSE-MIT](LICENSE-MIT))
+- Apache License, Version 2.0 ([LICENSE-APACHE-2.0](LICENSE-APACHE-2.0))
+
+at your option.
+
+### Contribution
+
+Unless you explicitly state otherwise, any contribution intentionally submitted
+for inclusion in the work by you, as defined in the Apache-2.0 license, shall be
+dual licensed as above, without any additional terms or conditions.
 - [`docs/matryoshka.md`](docs/matryoshka.md)
 - [`docs/raspberry-pi.md`](docs/raspberry-pi.md)
 - [`docs/provenance.md`](docs/provenance.md)
