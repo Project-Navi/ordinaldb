@@ -1504,13 +1504,39 @@ fn two_stage_query_chunk_rows(n_vectors: usize, nq: usize) -> usize {
     // sidecar once, so queries-per-stream sets the DRAM demand. At 32 the
     // aggregate stream rate ceilings batch throughput (~8.6k q/s at 1.26M x
     // 1024, measured); 128 quarters the traffic and hands the limit to the
-    // per-core compute ceiling.
-    const TILE_FLOOR: usize = 128;
+    // per-core compute ceiling. The optimal floor is a hardware-specific
+    // bandwidth/core tradeoff — a wide pool on a cache-resident or
+    // high-bandwidth corpus is better served by a lower floor (more chunks,
+    // more cores busy), where a bandwidth-bound large corpus wants the
+    // higher floor. `ORDINALDB_TWO_STAGE_TILE_FLOOR` lets operators tune it
+    // for their hardware; unlike the manifest resource limits (a security
+    // policy that must stay explicit, not ambient) this is a pure
+    // performance knob whose worst case is suboptimal throughput, never a
+    // correctness or safety change.
+    let tile_floor = two_stage_tile_floor();
     let max_rows_by_cells = (TWO_STAGE_MAX_SCORE_CELLS / n_vectors).max(1);
     let target_rows = nq
         .div_ceil(rayon::current_num_threads().max(1))
-        .max(TILE_FLOOR);
+        .max(tile_floor);
     max_rows_by_cells.min(target_rows).clamp(1, nq)
+}
+
+/// The two-stage query-chunk tile floor: `ORDINALDB_TWO_STAGE_TILE_FLOOR`
+/// if set to a positive integer, else the measured default of 128. Read
+/// once; a wide Rayon pool on a non-bandwidth-bound corpus can lower it to
+/// keep more cores busy.
+fn two_stage_tile_floor() -> usize {
+    use std::sync::OnceLock;
+    static FLOOR: OnceLock<usize> = OnceLock::new();
+    *FLOOR.get_or_init(|| parse_tile_floor(std::env::var("ORDINALDB_TWO_STAGE_TILE_FLOOR").ok()))
+}
+
+/// Pure parse/clamp for the tile-floor env value: a positive integer wins,
+/// anything else (absent, non-numeric, zero) falls back to the default 128.
+fn parse_tile_floor(raw: Option<String>) -> usize {
+    raw.and_then(|v| v.trim().parse::<usize>().ok())
+        .filter(|&v| v >= 1)
+        .unwrap_or(128)
 }
 
 struct LoadedVerifiedBundle {
@@ -1710,6 +1736,16 @@ mod chunk_scheduler_tests {
     fn single_thread_keeps_legacy_chunking() {
         let chunk = in_pool(1, || two_stage_query_chunk_rows(320, 4096));
         assert_eq!(chunk, TWO_STAGE_MAX_SCORE_CELLS / 320);
+    }
+
+    #[test]
+    fn env_override_parse_is_clamped() {
+        assert_eq!(super::parse_tile_floor(Some("32".into())), 32);
+        assert_eq!(super::parse_tile_floor(Some("1".into())), 1);
+        assert_eq!(super::parse_tile_floor(Some(" 64 ".into())), 64);
+        assert_eq!(super::parse_tile_floor(Some("0".into())), 128);
+        assert_eq!(super::parse_tile_floor(Some("bogus".into())), 128);
+        assert_eq!(super::parse_tile_floor(None), 128);
     }
 
     #[test]
