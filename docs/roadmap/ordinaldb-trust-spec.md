@@ -3,6 +3,13 @@
 Status: **draft spec — proposed, not scheduled**. Target: post-0.2.x (0.3.0
 candidate). Explicitly out of scope for the 0.2.0 launch.
 
+> **Design review (2026-07-04):** an implementation-trap audit of this draft —
+> JSON canonicalization, signed-message framing, key-id handling, seal-file
+> TOCTOU, reserved-name collision, key rotation, and hybrid-artifact coverage —
+> is in [`ed25519-sealing-audit.md`](ed25519-sealing-audit.md). Its findings are
+> actionable spec changes to make **before** `ordinaldb-trust` is implemented;
+> they are not yet folded into the spec below.
+
 ## Motivation
 
 `ordvec-manifest` verification is structural: it checks paths, sizes, and
