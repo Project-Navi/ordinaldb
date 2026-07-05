@@ -28,7 +28,7 @@ N_ADD_VECTORS = 300_000
 
 # With the GIL held for the whole call, the main thread gets at most a few
 # iterations (only while the worker is still in Python-level code around the
-# native call). With the GIL released, a >=0.15s call yields well over 100.
+# native call). With the GIL released, the yielding spin makes thousands.
 MIN_ITERATIONS = 30
 MIN_CALL_SECONDS = 0.15
 
@@ -60,7 +60,12 @@ def _main_thread_progress_during(native_call):
     started.wait()
     iterations = 0
     while not done.is_set():
-        time.sleep(0.001)
+        # sleep(0) is a pure scheduler yield with no minimum: sleep(0.001)
+        # rounds up to the OS timer tick (~15ms on Windows), which caps
+        # iterations far below MIN_ITERATIONS for a sub-second call
+        # regardless of GIL state. A bare yield counts actual GIL
+        # availability: thousands of iterations when released, ~0 when held.
+        time.sleep(0)
         iterations += 1
     thread.join()
     elapsed = time.perf_counter() - begin
