@@ -5,7 +5,8 @@ use ordinaldb_adapter_store::{
     write_legacy_snapshot_with_existing_lock, LegacyPayloads, StoreRevision, WriterLockGuard,
 };
 use ordinaldb_core::{
-    AddError, ConstructError, DenseError, IdMapIndex, OrdinalIndex, SearchResults,
+    AddError, BuildOptions, ConstructError, DenseError, IdMapIndex, OrdinalIndex, SearchResults,
+    SignPolicy,
 };
 use pyo3::buffer::{Element, PyBuffer};
 use pyo3::exceptions::{PyOSError, PyValueError};
@@ -23,9 +24,15 @@ use pyo3::types::{PyAny, PyList, PyModule, PyType};
 ///         dimensionality is locked by the first `add` call.
 ///     bits: Quantization bit width (1, 2, or 4). Defaults to 2.
 ///     bit_width: Alias for `bits`; provide at most one of the two.
+///     sign: Sign-sidecar build policy: "disabled", "optional"
+///         (default), or "required". A sidecar needs `bits == 2` and
+///         `dim` a multiple of 64; "required" raises when `(dim, bits)`
+///         cannot carry one (for a lazy index, on the first `add`).
 ///
 /// Raises:
-///     ValueError: If `bits` is unsupported or both aliases are given.
+///     ValueError: If `bits` is unsupported, both aliases are given,
+///         `sign` is not one of the three policies, or `sign="required"`
+///         cannot be honored for `(dim, bits)`.
 #[pyclass(module = "ordinaldb._ordinaldb", name = "OrdinalIndex")]
 struct PyOrdinalIndex {
     inner: OrdinalIndex,
@@ -34,15 +41,33 @@ struct PyOrdinalIndex {
 #[pymethods]
 impl PyOrdinalIndex {
     #[new]
-    #[pyo3(signature = (dim=None, bits=None, bit_width=None))]
-    #[pyo3(text_signature = "(dim=None, bits=None, bit_width=None)")]
-    fn new(dim: Option<usize>, bits: Option<u8>, bit_width: Option<u8>) -> PyResult<Self> {
+    #[pyo3(signature = (dim=None, bits=None, bit_width=None, sign="optional"))]
+    #[pyo3(text_signature = "(dim=None, bits=None, bit_width=None, sign=\"optional\")")]
+    fn new(
+        dim: Option<usize>,
+        bits: Option<u8>,
+        bit_width: Option<u8>,
+        sign: &str,
+    ) -> PyResult<Self> {
         let bits = resolve_bits(bits, bit_width)?;
-        let inner = match dim {
-            Some(dim) => OrdinalIndex::new(dim, bits).map_err(construct_err)?,
-            None => OrdinalIndex::new_lazy(bits).map_err(construct_err)?,
+        let options = BuildOptions {
+            sign: resolve_sign_policy(sign)?,
         };
+        let inner =
+            match dim {
+                Some(dim) => OrdinalIndex::new_with_build_options(dim, bits, options)
+                    .map_err(construct_err)?,
+                None => OrdinalIndex::new_lazy_with_build_options(bits, options)
+                    .map_err(construct_err)?,
+            };
         Ok(Self { inner })
+    }
+
+    /// Whether the index currently maintains a sign sidecar for two-stage
+    /// search.
+    #[getter]
+    fn has_sign_sidecar(&self) -> bool {
+        self.inner.has_sign_sidecar()
     }
 
     /// Append vectors to the index.
@@ -223,9 +248,16 @@ impl PyOrdinalIndex {
 ///         dimensionality is locked by the first `add_with_ids` call.
 ///     bits: Quantization bit width (1, 2, or 4). Defaults to 2.
 ///     bit_width: Alias for `bits`; provide at most one of the two.
+///     sign: Sign-sidecar build policy: "disabled", "optional"
+///         (default), or "required". A sidecar needs `bits == 2` and
+///         `dim` a multiple of 64; "required" raises when `(dim, bits)`
+///         cannot carry one (for a lazy index, on the first
+///         `add_with_ids`).
 ///
 /// Raises:
-///     ValueError: If `bits` is unsupported or both aliases are given.
+///     ValueError: If `bits` is unsupported, both aliases are given,
+///         `sign` is not one of the three policies, or `sign="required"`
+///         cannot be honored for `(dim, bits)`.
 #[pyclass(module = "ordinaldb._ordinaldb", name = "IdMapIndex")]
 struct PyIdMapIndex {
     inner: IdMapIndex,
@@ -472,15 +504,34 @@ impl PyAdapterWriteLock {
 #[pymethods]
 impl PyIdMapIndex {
     #[new]
-    #[pyo3(signature = (dim=None, bits=None, bit_width=None))]
-    #[pyo3(text_signature = "(dim=None, bits=None, bit_width=None)")]
-    fn new(dim: Option<usize>, bits: Option<u8>, bit_width: Option<u8>) -> PyResult<Self> {
+    #[pyo3(signature = (dim=None, bits=None, bit_width=None, sign="optional"))]
+    #[pyo3(text_signature = "(dim=None, bits=None, bit_width=None, sign=\"optional\")")]
+    fn new(
+        dim: Option<usize>,
+        bits: Option<u8>,
+        bit_width: Option<u8>,
+        sign: &str,
+    ) -> PyResult<Self> {
         let bits = resolve_bits(bits, bit_width)?;
+        let options = BuildOptions {
+            sign: resolve_sign_policy(sign)?,
+        };
         let inner = match dim {
-            Some(dim) => IdMapIndex::new(dim, bits).map_err(construct_err)?,
-            None => IdMapIndex::new_lazy(bits).map_err(construct_err)?,
+            Some(dim) => {
+                IdMapIndex::new_with_build_options(dim, bits, options).map_err(construct_err)?
+            }
+            None => {
+                IdMapIndex::new_lazy_with_build_options(bits, options).map_err(construct_err)?
+            }
         };
         Ok(Self { inner })
+    }
+
+    /// Whether the index currently maintains a sign sidecar for two-stage
+    /// search.
+    #[getter]
+    fn has_sign_sidecar(&self) -> bool {
+        self.inner.has_sign_sidecar()
     }
 
     /// Append vectors under caller-provided stable ids.
@@ -671,6 +722,17 @@ fn resolve_bits(bits: Option<u8>, bit_width: Option<u8>) -> PyResult<u8> {
         (Some(_), Some(_)) => Err(value_err("provide only one of bits or bit_width")),
         (Some(bits), None) | (None, Some(bits)) => Ok(bits),
         (None, None) => Ok(2),
+    }
+}
+
+fn resolve_sign_policy(sign: &str) -> PyResult<SignPolicy> {
+    match sign {
+        "disabled" => Ok(SignPolicy::Disabled),
+        "optional" => Ok(SignPolicy::Optional),
+        "required" => Ok(SignPolicy::Required),
+        other => Err(value_err(format!(
+            "sign must be one of \"disabled\", \"optional\", or \"required\"; got {other:?}"
+        ))),
     }
 }
 

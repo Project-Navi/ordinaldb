@@ -25,7 +25,10 @@ class OrdinalIndex:
         dim: int | None = None,
         bits: int | None = None,
         bit_width: int | None = None,
+        sign: str = "optional",
     ) -> OrdinalIndex: ...
+    @property
+    def has_sign_sidecar(self) -> bool: ...
     def add(self, vectors: NDArray[np.float32]) -> None: ...
     def search(
         self,
@@ -53,7 +56,10 @@ class IdMapIndex:
         dim: int | None = None,
         bits: int | None = None,
         bit_width: int | None = None,
+        sign: str = "optional",
     ) -> IdMapIndex: ...
+    @property
+    def has_sign_sidecar(self) -> bool: ...
     def add_with_ids(
         self,
         vectors: NDArray[np.float32],

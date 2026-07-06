@@ -104,6 +104,28 @@ class OrdinalIndexTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "cannot persist"):
                 idx.write(Path(tmp) / "lazy.odb")
 
+    def test_sign_policy_kwarg_mapping(self):
+        # dim=64, bits=2 can carry a sign sidecar.
+        self.assertTrue(OrdinalIndex(dim=64, bits=2).has_sign_sidecar)
+        self.assertTrue(OrdinalIndex(dim=64, bits=2, sign="optional").has_sign_sidecar)
+        self.assertTrue(OrdinalIndex(dim=64, bits=2, sign="required").has_sign_sidecar)
+        self.assertFalse(OrdinalIndex(dim=64, bits=2, sign="disabled").has_sign_sidecar)
+
+        # dim=4 cannot: "optional" constructs without one, "required" raises.
+        self.assertFalse(OrdinalIndex(dim=4, bits=2).has_sign_sidecar)
+        with self.assertRaisesRegex(ValueError, "sign policy Required"):
+            OrdinalIndex(dim=4, bits=2, sign="required")
+
+        with self.assertRaisesRegex(ValueError, "disabled"):
+            OrdinalIndex(dim=64, bits=2, sign="bogus")
+
+    def test_sign_required_lazy_index_raises_on_first_add(self):
+        idx = OrdinalIndex(bits=2, sign="required")
+        with self.assertRaisesRegex(ValueError, "sign policy Required"):
+            idx.add(VECTORS)  # dim=4 cannot carry a sidecar
+        self.assertIsNone(idx.dim_opt())
+        self.assertEqual(len(idx), 0)
+
 
 class IdMapIndexTests(unittest.TestCase):
     def test_add_search_delete_and_allowlist(self):
@@ -127,6 +149,15 @@ class IdMapIndexTests(unittest.TestCase):
         idx = IdMapIndex(bits=2)
         self.assertEqual(idx.dim(), 0)
         self.assertIsNone(idx.dim_opt())
+
+    def test_sign_policy_kwarg_mapping(self):
+        self.assertTrue(IdMapIndex(dim=64, bits=2, sign="required").has_sign_sidecar)
+        self.assertFalse(IdMapIndex(dim=64, bits=2, sign="disabled").has_sign_sidecar)
+        self.assertFalse(IdMapIndex(dim=4, bits=2).has_sign_sidecar)
+        with self.assertRaisesRegex(ValueError, "sign policy Required"):
+            IdMapIndex(dim=4, bits=2, sign="required")
+        with self.assertRaisesRegex(ValueError, "disabled"):
+            IdMapIndex(dim=64, bits=2, sign="bogus")
 
     def test_duplicate_ids_rejected_without_partial_mutation(self):
         idx = IdMapIndex(dim=4, bits=2)
