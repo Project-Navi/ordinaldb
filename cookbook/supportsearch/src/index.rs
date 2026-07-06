@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use ordinaldb::artifacts::{MANIFEST_FILE, SPARSE_BM25_AUX_NAME};
 use ordinaldb::hybrid::{Bm25MmapIndex, SparseIndexBuilder, TokenizerKind};
 use ordinaldb::manifest::{AuxiliaryArtifactDeclaration, CreateManifestOptions, VerifyOptions};
-use ordinaldb::{BuildOptions, DenseLoadOptions, IdMapIndex, OrdinalIndexBuilder};
+use ordinaldb::{BuildOptions, DenseLoadOptions, IdMapIndex, OrdinalIndexBuilder, SignPolicy};
 
 use crate::corpus::{corpus, Doc};
 use crate::embedder::{Embedder, DIM};
@@ -86,7 +86,15 @@ pub fn build_and_persist(
     );
 
     // Dense (OrdVec) side.
-    let mut dense_builder = OrdinalIndexBuilder::new(DIM, BITS, BuildOptions { sign: true })?;
+    // DIM=384 is sign-capable; Required fails fast instead of silently
+    // writing a bundle the require_sign load below would reject.
+    let mut dense_builder = OrdinalIndexBuilder::new(
+        DIM,
+        BITS,
+        BuildOptions {
+            sign: SignPolicy::Required,
+        },
+    )?;
     for doc in &docs {
         dense_builder.add(doc.id, &embeddings[&doc.id])?;
     }
