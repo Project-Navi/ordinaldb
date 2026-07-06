@@ -13,7 +13,7 @@
 
 use clap::Parser;
 use ordinaldb::manifest::{CreateManifestOptions, VerifyOptions};
-use ordinaldb::{DenseLoadOptions, DenseSearchOptions, OrdinalIndex};
+use ordinaldb::{DenseLoadOptions, DenseSearchOptions, OrdinalIndex, SignLoadPolicy};
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
@@ -322,7 +322,7 @@ fn main() {
         &manifest_path,
         VerifyOptions::default(),
         DenseLoadOptions {
-            require_sign: true,
+            sign: SignLoadPolicy::Require,
             expected_dim: Some(dim),
             expected_bits: Some(BITS),
         },
