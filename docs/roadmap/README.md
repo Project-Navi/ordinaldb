@@ -10,7 +10,7 @@ dates, and they change as the work teaches us things.
 | [`0.2.0-feature-parity-spec.md`](0.2.0-feature-parity-spec.md) | Storage and adapter feature parity for the 0.2.0 release | Draft for the 0.2.0 release train |
 | [`ltr-hybrid-production-spec.md`](ltr-hybrid-production-spec.md) | Hybrid (BM25 + dense + RRF) and learning-to-rank production readiness | Active |
 | [`0.3.0-api-async-streaming-spec.md`](0.3.0-api-async-streaming-spec.md) | API concurrency contract, async integration, result streaming | Design target after 0.2.0 |
-| [`ordinaldb-trust-spec.md`](ordinaldb-trust-spec.md) | Cryptographically sealed index bundles (Ed25519 seals) | Draft — proposed, not scheduled |
+| [`ordinaldb-trust-spec.md`](ordinaldb-trust-spec.md) | Cryptographically sealed index bundles (Ed25519 seals) | Reconciled design (2026-07-05) — implementation post-0.2.x; preconditions ship in 0.2.0 |
 
 Anything promised in a roadmap but not yet in `CHANGELOG.md` is not shipped.
 The README and [`docs/api.md`](../api.md) describe only what exists today.
