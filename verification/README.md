@@ -42,14 +42,15 @@ content, and is restored from backup if the final rename fails.
 To check it locally: install the toolchain with `elan`, create a Lake project that
 depends on Mathlib (`lake exe cache get`), drop this file in, and `lake build`.
 
-## Ed25519 sealing audit
+## Ed25519 sealing design review
 
-See [`../docs/roadmap/ed25519-sealing-audit.md`](../docs/roadmap/ed25519-sealing-audit.md)
-— a design review of the (draft, unscheduled) `ordinaldb-trust` Ed25519 sealing spec.
-Seven concrete implementation traps (JSON canonicalization, message framing /
+A contributed design review of the `ordinaldb-trust` Ed25519 sealing spec found
+seven concrete implementation traps (JSON canonicalization, message framing /
 malleability, key-id oracle, seal-file TOCTOU, reserved-name collision, key rotation,
-hybrid-artifact coverage). The findings are **actionable spec-level changes to make
-before `ordinaldb-trust` is implemented**; they are not yet reflected in the spec.
+hybrid-artifact coverage). As of 2026-07-05 all seven are **folded into the spec
+itself** — see [`../docs/roadmap/ordinaldb-trust-spec.md`](../docs/roadmap/ordinaldb-trust-spec.md)
+(reconciled design; "Design-review provenance" section). The standalone audit text
+is preserved in the history of PR #15.
 
 ## Provenance
 
@@ -57,5 +58,5 @@ Both artifacts are AI-assisted contributions (Perplexity), reviewed and incorpor
 here with the scope and status stated above. The Lean file's proofs were **broken as
 received** (three theorems failed to typecheck, one was mis-stated) and had to be
 repaired to compile — a concrete reminder that AI-generated proofs are *verified, not
-trusted*. The audit's findings are accurate to the current code but are not yet folded
-into the spec.
+trusted*. The sealing review's findings were verified accurate against the current
+code and are folded into the reconciled trust spec.

@@ -1,14 +1,12 @@
 # ordinaldb-trust: Cryptographically Sealed Index Bundles
 
-Status: **draft spec — proposed, not scheduled**. Target: post-0.2.x (0.3.0
-candidate). Explicitly out of scope for the 0.2.0 launch.
-
-> **Design review (2026-07-04):** an implementation-trap audit of this draft —
-> JSON canonicalization, signed-message framing, key-id handling, seal-file
-> TOCTOU, reserved-name collision, key rotation, and hybrid-artifact coverage —
-> is in [`ed25519-sealing-audit.md`](ed25519-sealing-audit.md). Its findings are
-> actionable spec changes to make **before** `ordinaldb-trust` is implemented;
-> they are not yet folded into the spec below.
+Status: **reconciled design — 2026-07-05**. This revision folds the 2026-07-04
+design review's seven findings into the spec body (see "Design-review
+provenance" at the end) and aligns the seal with the deterministic-manifest
+work in the v0.2.0 hardening wave. The crate itself remains post-0.2.x (0.3.0
+candidate) and out of scope for the 0.2.0 launch — but its **preconditions
+ship in 0.2.0**: the deterministic manifest and the reserved seal/provenance
+file names.
 
 ## Motivation
 
@@ -23,16 +21,43 @@ bundle is self-consistent, not that it is the bundle you built.
 generations so a caller can require, at open time, that vector state was
 produced by a holder of a known signing key and has not been altered since.
 
+## The identity/seal unification
+
+The v0.2.0 hardening wave makes `manifest.json` **deterministic**:
+
+- `manifest_id`, `created_at`, and `build.invocation_id` leave the manifest;
+  volatile build provenance moves to an unbound `provenance.json` sidecar.
+- Auxiliary artifact entries are written in sorted order, and the stored file
+  bytes are the canonical form. Hashing and signing always operate on the
+  bytes as stored on disk — never on a re-parsed / re-serialized document.
+
+Consequence: `sha256(manifest.json)` is the bundle's stable content address —
+"the manifest hash *is* the version" — and the Ed25519 seal signs exactly those
+bytes. One byte surface serves three roles:
+
+- **hash it** → the version / content address;
+- **sign it** → the seal;
+- **as a Merkle root** → it transitively binds every artifact and auxiliary
+  sidecar through the SHA-256 digests embedded in it.
+
+This resolves the review's canonicalization finding **by construction**: the
+signer and the verifier never re-serialize JSON, so serializer drift cannot
+invalidate old seals. A serialization or schema change is a manifest-schema
+version event; bundles written earlier keep verifying because their stored
+bytes are unchanged.
+
 ## What a bundle physically contains (grounding)
 
 A core `.odb` bundle holds `manifest.json`, `index.ovrq` (RankQuant ordinal
-codes), `sign.ovsb` (sign bitmaps), and `ids.bin`. Full-precision embeddings
-are never persisted — search operates on 1/2/4-bit ordinal state. This is an
-inherent property worth stating in the threat model independently of this
-crate: an attacker who obtains index files does not obtain the embedding
-vectors, only heavily quantized rank/sign information. Quantization degrades
-embedding-inversion attacks; it does not eliminate the signal, so "resistant"
-is the honest claim, never "immune."
+codes), `sign.ovsb` (sign bitmaps), and `ids.bin`; a sealed bundle adds the
+detached `manifest.sig`, and any bundle may carry an unbound, unsealed
+`provenance.json`. Full-precision embeddings are never persisted — search
+operates on 1/2/4-bit ordinal state. This is an inherent property worth
+stating in the threat model independently of this crate: an attacker who
+obtains index files does not obtain the embedding vectors, only heavily
+quantized rank/sign information. Quantization degrades embedding-inversion
+attacks; it does not eliminate the signal, so "resistant" is the honest claim,
+never "immune."
 
 ## Threats and what each mechanism actually buys
 
@@ -48,24 +73,83 @@ part of the supply chain for agentic systems; a sealed index makes "what the
 LLM retrieves" tamper-evident in the adversarial sense, not just the
 corruption sense.
 
-## Design sketch
+## Design
 
 **Crate:** `ordinaldb-trust`, workspace member, default-off feature in
 `ordinaldb` (`--features trust`). Core stays dependency-minimal without it.
 
 **Signing:** `ed25519-dalek` v2 (pure Rust, audited, fast on ARM — fits the
-Pi/edge posture). Detached seal file (e.g. `manifest.sig`) containing the
-signature over the canonical bytes of `manifest.json` plus a seal header
-(signer key id, created-at, schema version). Because the manifest already
-binds every artifact's path, size, and sha256, sealing the manifest seals the
-bundle transitively. Detached file keeps full compatibility with existing
-`ordvec-manifest` tooling and unsealed consumers.
+Pi/edge posture). Detached seal file `manifest.sig`, keeping full compatibility
+with existing `ordvec-manifest` tooling and unsealed consumers.
 
-**Adapter stores:** the immutable-generation model fits sealing naturally —
-sign each committed generation (`vectors/gNNNNNNNNNNNN.odb/`) at commit time;
-`adapter.redb` records the expected seal per generation. Mutable redb state
-itself is *not* sealed in phase 1 (its integrity story remains the adapter
-layer's CAS/revision checks); state that clearly in docs.
+**Seal envelope (message framing).** The signature covers a length-prefixed,
+domain-separated envelope — never a bare concatenation of manifest bytes and
+header fields:
+
+```text
+ORDINALDB_SEAL_V1\0            16-byte domain prefix
+u32 LE                         seal schema version
+u64 LE                         created_at (unix seconds)
+[32 bytes]                     Ed25519 verifying key, raw
+u64 LE                         manifest length in bytes
+[...]                          manifest.json bytes exactly as stored
+```
+
+Every field has an unambiguous boundary, the domain tag prevents
+cross-protocol signature reuse, and embedding the verifying key binds the seal
+to a specific key identity so a signature cannot be transplanted between trust
+domains. The envelope's `created_at` is the authoritative timestamp — the
+deterministic manifest no longer carries one.
+
+**Key identity.** The verifying key recorded in the seal is **diagnostic
+only**. Verification iterates the `TrustPolicy`'s explicit key list and never
+selects a key based on what the seal claims; on failure, the recorded key
+appears in the structured error ("sealed by X; policy trusts Y, Z"). Key id
+format: the raw 32-byte verifying key in the envelope; lowercase-hex
+fingerprints in reports and errors.
+
+**Verification order (seal-swap TOCTOU).** Read `manifest.json` and
+`manifest.sig` into memory in a single filesystem pass **before any
+cryptographic operation**: capture both byte strings, then run structural
+checks, then verify the Ed25519 signature over the captured manifest bytes,
+and only then load artifacts from verified paths. Filesystem reads and crypto
+are never interleaved, which eliminates the seal-file swap race. This composes
+with the verify-once open path: verify + seal-check + load is a single hash
+pass over the artifacts. Artifact reads after verification remain subject to
+the documented local-writer TOCTOU window (see Runtime honesty).
+
+**Reserved names.** `manifest.sig` and `provenance.json` join the bundle
+reserved-file list (alongside `manifest.json`, `index.ovrq`, `sign.ovsb`,
+`ids.bin`) in the v0.2.0 hardening wave — *before* this crate exists — so no
+auxiliary artifact can ever claim, and thereby overwrite, either file. When a
+trust policy requires a seal, a missing `manifest.sig` fails closed.
+
+**Auxiliary and hybrid artifacts (transitive coverage).** The Ed25519 seal
+covers `manifest.json` bytes only. Every registered auxiliary artifact —
+including `ordinaldb-hybrid`/LTR sidecars, which are retrieval-policy
+artifacts — is transitively covered because the sealed manifest contains its
+SHA-256. The required verification chain is: seal over manifest → SHA-256 of
+the auxiliary from the now-trusted manifest → bytes of the auxiliary. No
+additional per-artifact sealing exists, and no implementation may shortcut
+the chain.
+
+**Provenance.** `provenance.json` (build UUIDs, timestamps, tool versions) is
+deliberately **unbound and unsealed**: informational, not authoritative.
+Authoritative time and signer identity live in the seal envelope. Sealing the
+provenance sidecar separately is a phase-1 non-goal.
+
+**Adapter stores and key rotation.** The immutable-generation model fits
+sealing naturally — sign each committed generation
+(`vectors/gNNNNNNNNNNNN.odb/`) at commit time. `adapter.redb` records, per
+generation, the expected seal **and the signer key's fingerprint** (human-
+auditable rotation history). `TrustPolicy::RequireSeal` holds the full
+*accepted* key set; rotation is: add the new key to the accepted set, seal new
+generations with it, re-seal old generations at leisure, and drop the retired
+key only when no live generation's recorded fingerprint references it.
+Retired-but-not-yet-GC'd generations verify against the accepted set, so GC
+and export never block on a rotation in progress. Mutable redb state itself is
+*not* sealed in phase 1 (its integrity story remains the adapter layer's
+CAS/revision checks); state that clearly in docs.
 
 **Verification API (sketch):**
 
@@ -83,7 +167,8 @@ are explicit; ambient trust defeats the point.
 
 **CLI:** `ordinaldb-cli seal <bundle> --key <file>`,
 `ordinaldb-cli verify <bundle> --require-seal --pubkey <file>` — extends the
-existing structured verify/inspect reports with a `seal` block.
+existing structured verify/inspect reports (which carry the content digest as
+of 0.2.0) with a `seal` block. Key generation via `ordinaldb-cli keygen`.
 
 **Runtime honesty:** verification happens at open (and via an explicit
 `re-verify` call). Once state is loaded/mapped, a local writer with sufficient
@@ -93,7 +178,8 @@ must say so.
 
 **Key management (phase 1 = deliberately minimal):** callers supply key
 material; generation is offered via CLI (`ordinaldb-cli keygen`). No keychain,
-KMS, or HSM integration in-crate. Rotation = re-seal; document it.
+KMS, or HSM integration in-crate. Rotation semantics are defined above;
+re-sealing is the operator's action to schedule.
 
 ## Phase 2 (separate decision): encryption at rest
 
@@ -108,6 +194,9 @@ it; do not conflate the two in docs or marketing.
 - OK to claim: "raw embeddings are never written to disk"; "cryptographically
   sealed indexes (Ed25519), verified fail-closed at load"; "tamper-evident
   retrieval corpus for RAG/agent pipelines."
+- The content-address claim ("the manifest hash is the version") becomes true
+  at v0.2.0 via the deterministic manifest, independent of this crate — but
+  sealing/authenticity claims are **not OK until this crate ships**.
 - Not OK: "encrypted" (until phase 2 ships), "immune to inversion," or any
   claim implying protection from a compromised host.
 
@@ -119,7 +208,9 @@ sign-off per project dependency policy before implementation starts.
 ## Non-goals
 
 Access control, multi-tenant isolation, network auth, key storage/escrow,
-sealing of mutable redb state (phase 1), host-compromise defense.
+sealing of mutable redb state (phase 1), sealing of `provenance.json`
+(phase 1), threshold/multi-signer verification (open question), host-compromise
+defense.
 
 ## Open questions
 
@@ -127,5 +218,15 @@ sealing of mutable redb state (phase 1), host-compromise defense.
 2. Multiple signers / threshold verification (fleet scenarios) — v1 or later?
 3. Should `open_verified` grow an env-var kill switch to *require* seals
    process-wide (defense against a call site forgetting the policy)?
-4. Interaction with `ordinaldb-hybrid` auxiliary artifacts — seal them in the
-   same manifest walk?
+
+## Design-review provenance
+
+A contributed design review (2026-07-04, AI-assisted via Perplexity; reviewed,
+verified accurate against the code) found seven implementation traps in the
+original draft: JSON canonicalization, signed-message framing, key-id oracle,
+seal-file swap TOCTOU, `manifest.sig` reserved-name collision, key-rotation
+semantics, and hybrid-artifact coverage. All seven are folded into the body
+above — canonicalization is resolved structurally by the deterministic
+manifest; rotation semantics are defined minimally; the rest are binding
+design requirements. The standalone audit text is preserved in the history of
+PR #15 (`ed25519-sealing-audit.md`, removed at reconciliation).
