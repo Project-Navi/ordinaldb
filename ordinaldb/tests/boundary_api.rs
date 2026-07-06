@@ -8,7 +8,7 @@ use ordinaldb::hybrid::{
 use ordinaldb::manifest::{AuxiliaryArtifactDeclaration, CreateManifestOptions, VerifyOptions};
 use ordinaldb::{
     BuildOptions, DenseError, DenseLoadOptions, IdMapIndex, OrdinalIndex, OrdinalIndexBuilder,
-    SignPolicy,
+    SignLoadPolicy, SignPolicy,
 };
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -24,7 +24,7 @@ fn verified_idmap_bundle_loads_dense_and_sparse_with_stable_row_ids() {
         &manifest_path,
         VerifyOptions::default(),
         DenseLoadOptions {
-            require_sign: true,
+            sign: SignLoadPolicy::Require,
             expected_dim: Some(64),
             expected_bits: Some(2),
         },
@@ -83,7 +83,7 @@ fn verified_dense_load_can_require_sign_sidecar() {
         &manifest_path,
         VerifyOptions::default(),
         DenseLoadOptions {
-            require_sign: true,
+            sign: SignLoadPolicy::Require,
             expected_dim: Some(64),
             expected_bits: Some(2),
         },
@@ -208,7 +208,7 @@ fn declared_but_unloadable_sign_sidecar_is_not_reported_missing() {
         bundle.join(MANIFEST_FILE),
         VerifyOptions::default(),
         DenseLoadOptions {
-            require_sign: true,
+            sign: SignLoadPolicy::Require,
             expected_dim: Some(64),
             expected_bits: Some(2),
         },
@@ -230,7 +230,7 @@ fn batch_dense_sparse_and_rrf_preserve_per_query_allowlists() {
         &manifest_path,
         VerifyOptions::default(),
         DenseLoadOptions {
-            require_sign: true,
+            sign: SignLoadPolicy::Require,
             expected_dim: Some(64),
             expected_bits: Some(2),
         },
@@ -319,7 +319,7 @@ fn hybrid_bundle_open_verified_returns_dense_and_sparse_from_one_manifest() {
         &manifest_path,
         VerifyOptions::default(),
         DenseLoadOptions {
-            require_sign: true,
+            sign: SignLoadPolicy::Require,
             expected_dim: Some(64),
             expected_bits: Some(2),
         },
@@ -362,7 +362,7 @@ fn hybrid_bundle_open_verified_reports_dense_and_sparse_failures_distinctly() {
         &manifest_path,
         VerifyOptions::default(),
         DenseLoadOptions {
-            require_sign: true,
+            sign: SignLoadPolicy::Require,
             expected_dim: Some(32),
             expected_bits: Some(2),
         },
@@ -380,7 +380,7 @@ fn hybrid_bundle_open_verified_reports_dense_and_sparse_failures_distinctly() {
         &manifest_path,
         VerifyOptions::default(),
         DenseLoadOptions {
-            require_sign: true,
+            sign: SignLoadPolicy::Require,
             expected_dim: Some(64),
             expected_bits: Some(2),
         },

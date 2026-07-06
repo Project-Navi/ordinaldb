@@ -251,10 +251,9 @@ pub enum DenseError {
     /// constructed; a lower-level error than
     /// [`Self::ManifestVerification`].
     Manifest(ordvec_manifest::ManifestError),
-    /// A required auxiliary artifact declared on the manifest (for example
-    /// a sign sidecar requested via
-    /// [`crate::ordinal::DenseLoadOptions::require_sign`]) was missing or
-    /// invalid.
+    /// An auxiliary artifact declared on the manifest and required by the
+    /// load (for example a sign sidecar the [`crate::SignLoadPolicy`]
+    /// load policy requires) was declared but not loadable.
     Auxiliary(ordvec_manifest::RequireAuxiliaryError),
     /// The flat `queries` buffer length is not a multiple of `dim` (or
     /// `dim` is `0`, which only occurs when searching a lazily-constructed,
@@ -283,7 +282,13 @@ pub enum DenseError {
     /// [`crate::SignPolicy`] build policy allows one).
     /// `DenseSearchMode::Auto` never produces this error — it silently
     /// falls back to an exact scan instead.
+    ///
+    /// Also returned by a verified load whose [`crate::SignLoadPolicy`]
+    /// requires a sign sidecar the bundle does not declare.
     MissingSignSidecar,
+    /// The load policy is [`crate::SignLoadPolicy::Forbid`] but the
+    /// verified bundle declares a sign sidecar.
+    SignSidecarForbidden,
     /// An internal consistency check failed with a human-readable
     /// `message` — for example, a verified bundle's manifest metadata
     /// (dim/bits/row count) disagreeing with the artifact actually loaded
@@ -348,6 +353,9 @@ impl fmt::Display for DenseError {
                 "invalid query value at query {query_index}, coord {coord_index}: {value}"
             ),
             Self::MissingSignSidecar => f.write_str("verified dense load requires a sign sidecar"),
+            Self::SignSidecarForbidden => f.write_str(
+                "verified dense load forbids a sign sidecar, but the bundle declares one",
+            ),
             Self::MetadataMismatch(message) => f.write_str(message),
             Self::RowIdentity(message) => f.write_str(message),
             Self::AllowlistRowIdMissing(id) => {
@@ -374,6 +382,7 @@ impl Error for DenseError {
             Self::InvalidQueryDim { .. }
             | Self::InvalidQueryValue { .. }
             | Self::MissingSignSidecar
+            | Self::SignSidecarForbidden
             | Self::MetadataMismatch(_)
             | Self::RowIdentity(_)
             | Self::AllowlistRowIdMissing(_)

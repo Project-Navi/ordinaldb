@@ -700,13 +700,16 @@ impl IdMapIndex {
 
     /// Load a bundle directory previously written by [`Self::write`] or
     /// [`Self::write_verified_bundle`], with default manifest
-    /// verification.
+    /// verification and the default sign-sidecar load policy
+    /// ([`crate::SignLoadPolicy::RequireIfSupported`]).
     ///
     /// # Errors
     /// Returns an `InvalidData` [`std::io::Error`] if the bundle is
     /// missing its ID sidecar (it was written by a bare [`OrdinalIndex`] —
     /// load it with [`OrdinalIndex::load`] instead), fails manifest
-    /// verification, or is otherwise malformed.
+    /// verification, is a sign-capable bundle missing its sign sidecar
+    /// (use [`Self::open_verified`] with [`crate::SignLoadPolicy::Any`] to
+    /// load it without one), or is otherwise malformed.
     pub fn load(path: impl AsRef<std::path::Path>) -> std::io::Result<Self> {
         let artifacts = crate::io::load_id_map_bundle(path)?;
         let inner = OrdinalIndex::from_loaded_parts(artifacts.rankquant, artifacts.sign)?;

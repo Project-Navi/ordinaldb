@@ -53,13 +53,18 @@
 //! a bundle back:
 //!
 //! - `OrdinalIndex::load` / `IdMapIndex::load` open a bundle *directory*
-//!   with default verification.
+//!   with default verification and default load options.
 //! - `OrdinalIndex::open_verified` / `IdMapIndex::open_verified` open a
 //!   bundle from an explicit `manifest.json` path with caller-controlled
 //!   [`manifest::VerifyOptions`] (size limits, path-escape policy) and
-//!   [`ordinal::DenseLoadOptions`] (require a sign sidecar, assert an
+//!   [`ordinal::DenseLoadOptions`] (sign-sidecar load policy, assert an
 //!   expected `dim`/`bits`), reporting mismatches as a [`DenseError`]
 //!   instead of a generic I/O error.
+//!
+//! Both paths default to [`SignLoadPolicy::RequireIfSupported`]: a bundle
+//! whose `(dim, bits)` can carry a sign sidecar must have one to load.
+//! Pass [`SignLoadPolicy::Any`] to `open_verified` to load such a bundle
+//! without its sidecar.
 //!
 //! Loading an `OrdinalIndex` bundle that actually carries an ID sidecar
 //! (or vice versa) is a load-time error that names the correct type to use.
@@ -135,6 +140,6 @@ pub use ordinal::{
     rankquant_compatible, rankquant_required_multiple, sign_compatible, sign_required_multiple,
     BuildOptions, DenseBundleInspectReport, DenseLoadOptions, DenseSearchExecution,
     DenseSearchMode, DenseSearchOptions, DenseSearchPlan, DenseSearchReport, DenseSearchTimings,
-    OrdinalIndex, OrdinalIndexBuilder, SearchResults, SignPolicy, TwoStageOptions,
+    OrdinalIndex, OrdinalIndexBuilder, SearchResults, SignLoadPolicy, SignPolicy, TwoStageOptions,
     VerifiedBundleReport,
 };

@@ -82,19 +82,52 @@ impl Default for BuildOptions {
     }
 }
 
+/// Policy controlling whether a verified load requires, tolerates, or
+/// rejects a sign sidecar on the bundle (see [`DenseLoadOptions::sign`]).
+/// This is the load-side counterpart of the build-side [`SignPolicy`]: it
+/// never changes what was written, only whether the load accepts it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SignLoadPolicy {
+    /// Require the sidecar whenever the bundle's `(dim, bits)` can carry
+    /// one (see [`sign_compatible`]), failing with
+    /// [`DenseError::MissingSignSidecar`] when it is absent; bundles that
+    /// cannot carry a sidecar load without one. This is the default.
+    RequireIfSupported,
+    /// Fail the load with [`DenseError::MissingSignSidecar`] unless the
+    /// bundle declares a sign sidecar.
+    Require,
+    /// Load the sidecar when the bundle declares one and proceed without
+    /// it otherwise; never fail over sidecar presence.
+    Any,
+    /// Fail the load with [`DenseError::SignSidecarForbidden`] when the
+    /// bundle declares a sign sidecar.
+    Forbid,
+}
+
 /// Options controlling how a verified bundle is loaded (see
 /// [`OrdinalIndex::open_verified`] / [`crate::IdMapIndex::open_verified`]).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DenseLoadOptions {
-    /// If `true`, fail the load with [`DenseError::MissingSignSidecar`]
-    /// when the bundle has no sign sidecar, instead of loading without one.
-    pub require_sign: bool,
+    /// Sign-sidecar load policy — see [`SignLoadPolicy`]. Defaults to
+    /// [`SignLoadPolicy::RequireIfSupported`]: a bundle whose `(dim, bits)`
+    /// can carry a sidecar must have one to load.
+    pub sign: SignLoadPolicy,
     /// If `Some`, fail the load with [`DenseError::MetadataMismatch`] when
     /// the bundle's manifest dim does not match.
     pub expected_dim: Option<usize>,
     /// If `Some`, fail the load with [`DenseError::MetadataMismatch`] when
     /// the bundle's manifest RankQuant bit width does not match.
     pub expected_bits: Option<u8>,
+}
+
+impl Default for DenseLoadOptions {
+    fn default() -> Self {
+        Self {
+            sign: SignLoadPolicy::RequireIfSupported,
+            expected_dim: None,
+            expected_bits: None,
+        }
+    }
 }
 
 /// Which search strategy to use.
@@ -1152,13 +1185,16 @@ impl OrdinalIndex {
 
     /// Load a bundle directory previously written by [`Self::write`] or
     /// [`Self::write_verified_bundle`], with default manifest
-    /// verification.
+    /// verification and the default sign-sidecar load policy
+    /// ([`SignLoadPolicy::RequireIfSupported`]).
     ///
     /// # Errors
     /// Returns an `InvalidData` [`std::io::Error`] if the bundle carries an
     /// ID sidecar (it was written by [`crate::IdMapIndex`] — load it with
     /// [`crate::IdMapIndex::load`] instead), fails manifest verification,
-    /// or is otherwise malformed.
+    /// is a sign-capable bundle missing its sign sidecar (use
+    /// [`Self::open_verified`] with [`SignLoadPolicy::Any`] to load it
+    /// without one), or is otherwise malformed.
     pub fn load(path: impl AsRef<std::path::Path>) -> std::io::Result<Self> {
         let artifacts = crate::io::load_ordinal_bundle(path)?;
         Self::from_loaded_parts(artifacts.rankquant, artifacts.sign)
@@ -1718,16 +1754,19 @@ fn load_verified_bundle(
         ));
     }
 
-    let sign_path = if load_options.require_sign {
-        match plan.require_auxiliary(crate::io::SIGN_AUX_NAME) {
-            Ok(path) => Some(path.to_path_buf()),
-            Err(crate::manifest::RequireAuxiliaryError::MissingDeclaration { .. }) => {
-                return Err(DenseError::MissingSignSidecar);
-            }
-            Err(error) => return Err(DenseError::Auxiliary(error)),
+    let sign_declared = plan.auxiliary_by_name(crate::io::SIGN_AUX_NAME).is_some();
+    let sign_path = match load_options.sign {
+        SignLoadPolicy::Forbid if sign_declared => {
+            return Err(DenseError::SignSidecarForbidden);
         }
-    } else {
-        crate::io::auxiliary_path(&plan, crate::io::SIGN_AUX_NAME)?
+        SignLoadPolicy::Forbid => None,
+        SignLoadPolicy::Require => required_sign_path(&plan)?,
+        SignLoadPolicy::RequireIfSupported if sign_compatible(metadata.dim, metadata_bits) => {
+            required_sign_path(&plan)?
+        }
+        SignLoadPolicy::RequireIfSupported | SignLoadPolicy::Any => {
+            crate::io::auxiliary_path(&plan, crate::io::SIGN_AUX_NAME)?
+        }
     };
     let sign = match sign_path {
         Some(path) => {
@@ -1751,6 +1790,21 @@ fn load_verified_bundle(
         sign,
         ids_path,
     })
+}
+
+/// The verified path of the bundle's sign sidecar, required: a missing
+/// declaration is [`DenseError::MissingSignSidecar`]; a declared but
+/// unloadable sidecar is [`DenseError::Auxiliary`].
+fn required_sign_path(
+    plan: &ordvec_manifest::VerifiedLoadPlan,
+) -> Result<Option<PathBuf>, DenseError> {
+    match plan.require_auxiliary(crate::io::SIGN_AUX_NAME) {
+        Ok(path) => Ok(Some(path.to_path_buf())),
+        Err(crate::manifest::RequireAuxiliaryError::MissingDeclaration { .. }) => {
+            Err(DenseError::MissingSignSidecar)
+        }
+        Err(error) => Err(DenseError::Auxiliary(error)),
+    }
 }
 
 impl OrdinalIndexBuilder {
