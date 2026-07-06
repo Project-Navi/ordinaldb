@@ -25,8 +25,10 @@ produced by a holder of a known signing key and has not been altered since.
 
 The v0.2.0 hardening wave makes `manifest.json` **deterministic**:
 
-- `manifest_id`, `created_at`, and `build.invocation_id` leave the manifest;
-  volatile build provenance moves to an unbound `provenance.json` sidecar.
+- `manifest_id`, `created_at`, and `build.invocation_id` leave the manifest —
+  and the bundle: v0.2.0 bundles are **manifest + artifacts only**. Volatile
+  build provenance is not persisted anywhere in the bundle; authoritative
+  created-at and signer identity arrive later in the seal envelope.
 - Auxiliary artifact entries are written in sorted order, and the stored file
   bytes are the canonical form. Hashing and signing always operate on the
   bytes as stored on disk — never on a re-parsed / re-serialized document.
@@ -49,9 +51,14 @@ bytes are unchanged.
 ## What a bundle physically contains (grounding)
 
 A core `.odb` bundle holds `manifest.json`, `index.ovrq` (RankQuant ordinal
-codes), `sign.ovsb` (sign bitmaps), and `ids.bin`; a sealed bundle adds the
-detached `manifest.sig`, and any bundle may carry an unbound, unsealed
-`provenance.json`. Full-precision embeddings are never persisted — search
+codes), `sign.ovsb` (sign bitmaps), and `ids.bin`, plus any caller-registered
+auxiliary artifacts (e.g. `ordinaldb-hybrid`/LTR sidecars) — every one of
+them recorded in `manifest.json` with its SHA-256 and therefore **inside the
+seal's trust scope** (see Auxiliary and hybrid artifacts). A sealed bundle
+adds exactly one file that the manifest does not record: the detached
+`manifest.sig`. No other unregistered file ships in a bundle — in particular
+no provenance file (`provenance.json` is a reserved name, not a shipped
+file — see Provenance). Full-precision embeddings are never persisted — search
 operates on 1/2/4-bit ordinal state. This is an inherent property worth
 stating in the threat model independently of this crate: an attacker who
 obtains index files does not obtain the embedding vectors, only heavily
@@ -131,12 +138,22 @@ artifacts — is transitively covered because the sealed manifest contains its
 SHA-256. The required verification chain is: seal over manifest → SHA-256 of
 the auxiliary from the now-trusted manifest → bytes of the auxiliary. No
 additional per-artifact sealing exists, and no implementation may shortcut
-the chain.
+the chain. The corollary defines the trust boundary: a file present in the
+bundle directory but *not* registered in the manifest is outside the trust
+scope, and sealed-bundle verification must treat it as foreign — auxiliary
+artifacts belong in the manifest precisely so that they are sealed.
 
-**Provenance.** `provenance.json` (build UUIDs, timestamps, tool versions) is
-deliberately **unbound and unsealed**: informational, not authoritative.
-Authoritative time and signer identity live in the seal envelope. Sealing the
-provenance sidecar separately is a phase-1 non-goal.
+**Provenance.** No provenance file ships in v0.2.0 — an unbound file inside a
+"verifiable bundle" invites the assumption that it is verified, which muddies
+exactly the story the bundle exists to tell. `provenance.json` is **reserved
+as a name only**, keeping the option of a future informational sidecar open
+without letting an auxiliary artifact squat on it. Note the reservation is a
+v0.2.0-hardening-wave deliverable, not yet enforced at the time of this
+revision: today's bundle writer rejects only the four core artifact names, so
+`manifest.sig` and `provenance.json` must be added to the reserved-file
+checks (`copy_auxiliary_artifacts` / `validate_bundle_relative_path`) before
+any claim of reservation is load-bearing. Authoritative time and signer
+identity live in the seal envelope once this crate ships.
 
 **Adapter stores and key rotation.** The immutable-generation model fits
 sealing naturally — sign each committed generation
@@ -208,9 +225,9 @@ sign-off per project dependency policy before implementation starts.
 ## Non-goals
 
 Access control, multi-tenant isolation, network auth, key storage/escrow,
-sealing of mutable redb state (phase 1), sealing of `provenance.json`
-(phase 1), threshold/multi-signer verification (open question), host-compromise
-defense.
+sealing of mutable redb state (phase 1), shipping a provenance sidecar
+(`provenance.json` is a reserved name only), threshold/multi-signer
+verification (open question), host-compromise defense.
 
 ## Open questions
 
