@@ -71,7 +71,8 @@
 //! use ordinaldb::OrdinalIndex;
 //!
 //! // 4-dimensional vectors, 2-bit RankQuant codes. For `bits == 2`, `dim`
-//! // must be a multiple of 4 (see `ConstructError::DimNotCompatibleWithBits`).
+//! // must be a multiple of 4 (preflight with `rankquant_compatible`; see
+//! // `ConstructError::DimNotCompatibleWithBits`).
 //! let mut index = OrdinalIndex::new(4, 2)?;
 //!
 //! // Two row-major vectors, back to back.

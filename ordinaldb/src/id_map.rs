@@ -54,7 +54,8 @@ pub struct IdMapSearchReport {
 /// use ordinaldb::IdMapIndex;
 ///
 /// // 4-dimensional vectors, 2-bit RankQuant codes. For `bits == 2`, `dim`
-/// // must be a multiple of 4 (see `ConstructError::DimNotCompatibleWithBits`).
+/// // must be a multiple of 4 (preflight with `rankquant_compatible`; see
+/// // `ConstructError::DimNotCompatibleWithBits`).
 /// let mut index = IdMapIndex::new(4, 2)?;
 ///
 /// // Three row-major vectors with caller-chosen external IDs.
