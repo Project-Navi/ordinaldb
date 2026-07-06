@@ -131,7 +131,9 @@ mod io;
 pub use error::{AddError, ConstructError, DenseError};
 pub use id_map::{IdMapIndex, IdMapSearchReport};
 pub use ordinal::{
+    rankquant_compatible, rankquant_required_multiple, sign_compatible, sign_required_multiple,
     BuildOptions, DenseBundleInspectReport, DenseLoadOptions, DenseSearchExecution,
     DenseSearchMode, DenseSearchOptions, DenseSearchPlan, DenseSearchReport, DenseSearchTimings,
-    OrdinalIndex, OrdinalIndexBuilder, SearchResults, TwoStageOptions, VerifiedBundleReport,
+    OrdinalIndex, OrdinalIndexBuilder, SearchResults, SignPolicy, TwoStageOptions,
+    VerifiedBundleReport,
 };

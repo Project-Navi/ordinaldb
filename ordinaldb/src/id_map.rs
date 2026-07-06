@@ -104,7 +104,16 @@ impl IdMapIndex {
         Self::new_with_build_options(dim, bits, BuildOptions::default())
     }
 
-    pub(crate) fn new_with_build_options(
+    /// Construct an empty index with a fixed `dim` and RankQuant `bits`,
+    /// with explicit [`BuildOptions`].
+    ///
+    /// # Errors
+    /// Returns [`ConstructError`] if `bits` is unsupported, `dim` is
+    /// invalid or incompatible with `bits`, or
+    /// [`ConstructError::SignSidecarUnsupported`] when
+    /// [`crate::SignPolicy::Required`] cannot be honored for `(dim,
+    /// bits)`.
+    pub fn new_with_build_options(
         dim: usize,
         bits: u8,
         options: BuildOptions,
@@ -124,8 +133,26 @@ impl IdMapIndex {
     /// Returns [`ConstructError::UnsupportedBits`] if `bits` is not `1`,
     /// `2`, or `4`.
     pub fn new_lazy(bits: u8) -> Result<Self, ConstructError> {
+        Self::new_lazy_with_build_options(bits, BuildOptions::default())
+    }
+
+    /// Like [`Self::new_lazy`], with explicit [`BuildOptions`].
+    ///
+    /// The sign-sidecar decision is deferred to the first non-empty
+    /// [`Self::add_with_ids_2d`], which commits `dim`: under
+    /// [`crate::SignPolicy::Required`], a first batch whose `dim` cannot
+    /// carry a sidecar is rejected with
+    /// [`AddError::SignSidecarUnsupported`] and the index stays lazy.
+    ///
+    /// # Errors
+    /// Returns [`ConstructError::UnsupportedBits`] if `bits` is not `1`,
+    /// `2`, or `4`.
+    pub fn new_lazy_with_build_options(
+        bits: u8,
+        options: BuildOptions,
+    ) -> Result<Self, ConstructError> {
         Ok(Self {
-            inner: OrdinalIndex::new_lazy(bits)?,
+            inner: OrdinalIndex::new_lazy_with_build_options(bits, options)?,
             slot_to_id: Vec::new(),
             id_to_slot: HashMap::new(),
         })
@@ -607,6 +634,12 @@ impl IdMapIndex {
     /// it never changes afterward.
     pub fn bits(&self) -> u8 {
         self.inner.bits()
+    }
+
+    /// Returns `true` if the index currently maintains a sign sidecar for
+    /// two-stage search.
+    pub fn has_sign_sidecar(&self) -> bool {
+        self.inner.has_sign_sidecar()
     }
 
     /// Write the index as a `.odb` bundle (including the ID sidecar) to
