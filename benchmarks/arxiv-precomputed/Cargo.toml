@@ -19,12 +19,13 @@ ordinaldb = { path = "../../ordinaldb" }
 opt-level = 3
 debug = false
 
-# Pre-publish only: mirror the workspace root's pin to the ordvec perf-train
-# integration heads. Removed at the ordvec 0.6.0 publish, restoring crates.io
-# version resolution. Deliberately a branch, not a rev: it must track the
-# workspace root's [patch.crates-io] block commit-for-commit, and removal is
-# enforced at release time by scripts/release_crate_package_smoke.sh, which
-# fails packaging on any git-sourced Cargo.lock entry.
+# Pre-publish only: mirror the workspace root's pin to ordvec main (the
+# perf-train integration PRs are merged). Removed at the ordvec 0.6.0
+# publish, restoring crates.io version resolution. Deliberately a branch,
+# not a rev: it must track the workspace root's [patch.crates-io] block
+# commit-for-commit, and removal is enforced at release time by
+# scripts/release_crate_package_smoke.sh, which fails packaging on any
+# git-sourced Cargo.lock entry.
 [patch.crates-io]
-ordvec = { git = "https://github.com/Project-Navi/ordvec", branch = "integration/full-stack" }
-ordvec-manifest = { git = "https://github.com/Project-Navi/ordvec", branch = "integration/full-stack" }
+ordvec = { git = "https://github.com/Project-Navi/ordvec", branch = "main" }
+ordvec-manifest = { git = "https://github.com/Project-Navi/ordvec", branch = "main" }

@@ -22,9 +22,9 @@ lto = true
 codegen-units = 1
 opt-level = 3
 
-# Pre-publish only: build the workspace against the ordvec perf-train
-# integration heads (PRs #277/#278/#279/#280 merged). Removed at the
-# ordvec 0.6.0 publish, restoring crates.io version resolution.
+# Pre-publish only: build the workspace against ordvec main (the perf-train
+# integration PRs are merged; main is the canonical 0.6.0 head). Removed at
+# the ordvec 0.6.0 publish, restoring crates.io version resolution.
 [patch.crates-io]
-ordvec = { git = "https://github.com/Project-Navi/ordvec", branch = "integration/full-stack" }
-ordvec-manifest = { git = "https://github.com/Project-Navi/ordvec", branch = "integration/full-stack" }
+ordvec = { git = "https://github.com/Project-Navi/ordvec", branch = "main" }
+ordvec-manifest = { git = "https://github.com/Project-Navi/ordvec", branch = "main" }
