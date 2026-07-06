@@ -51,10 +51,14 @@ bytes are unchanged.
 ## What a bundle physically contains (grounding)
 
 A core `.odb` bundle holds `manifest.json`, `index.ovrq` (RankQuant ordinal
-codes), `sign.ovsb` (sign bitmaps), and `ids.bin`; a sealed bundle adds the
-detached `manifest.sig` and nothing else (`provenance.json` is a reserved
-name, not a shipped file — see Provenance). Full-precision embeddings are
-never persisted — search
+codes), `sign.ovsb` (sign bitmaps), and `ids.bin`, plus any caller-registered
+auxiliary artifacts (e.g. `ordinaldb-hybrid`/LTR sidecars) — every one of
+them recorded in `manifest.json` with its SHA-256 and therefore **inside the
+seal's trust scope** (see Auxiliary and hybrid artifacts). A sealed bundle
+adds exactly one file that the manifest does not record: the detached
+`manifest.sig`. No other unregistered file ships in a bundle — in particular
+no provenance file (`provenance.json` is a reserved name, not a shipped
+file — see Provenance). Full-precision embeddings are never persisted — search
 operates on 1/2/4-bit ordinal state. This is an inherent property worth
 stating in the threat model independently of this crate: an attacker who
 obtains index files does not obtain the embedding vectors, only heavily
@@ -134,14 +138,22 @@ artifacts — is transitively covered because the sealed manifest contains its
 SHA-256. The required verification chain is: seal over manifest → SHA-256 of
 the auxiliary from the now-trusted manifest → bytes of the auxiliary. No
 additional per-artifact sealing exists, and no implementation may shortcut
-the chain.
+the chain. The corollary defines the trust boundary: a file present in the
+bundle directory but *not* registered in the manifest is outside the trust
+scope, and sealed-bundle verification must treat it as foreign — auxiliary
+artifacts belong in the manifest precisely so that they are sealed.
 
 **Provenance.** No provenance file ships in v0.2.0 — an unbound file inside a
 "verifiable bundle" invites the assumption that it is verified, which muddies
 exactly the story the bundle exists to tell. `provenance.json` is **reserved
 as a name only**, keeping the option of a future informational sidecar open
-without letting an auxiliary artifact squat on it. Authoritative time and
-signer identity live in the seal envelope once this crate ships.
+without letting an auxiliary artifact squat on it. Note the reservation is a
+v0.2.0-hardening-wave deliverable, not yet enforced at the time of this
+revision: today's bundle writer rejects only the four core artifact names, so
+`manifest.sig` and `provenance.json` must be added to the reserved-file
+checks (`copy_auxiliary_artifacts` / `validate_bundle_relative_path`) before
+any claim of reservation is load-bearing. Authoritative time and signer
+identity live in the seal envelope once this crate ships.
 
 **Adapter stores and key rotation.** The immutable-generation model fits
 sealing naturally — sign each committed generation
