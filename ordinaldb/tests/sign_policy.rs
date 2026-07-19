@@ -116,6 +116,31 @@ fn required_compatible_builds_sidecar() {
 }
 
 #[test]
+fn required_lazy_rejects_bits_that_can_never_support_a_sidecar() {
+    for bits in [1, 4] {
+        let Err(ordinal_err) =
+            OrdinalIndex::new_lazy_with_build_options(bits, with_sign(SignPolicy::Required))
+        else {
+            panic!("required lazy construction must reject unsupported sign bits");
+        };
+        assert_eq!(
+            ordinal_err,
+            ConstructError::SignSidecarUnsupportedBits { bits }
+        );
+
+        let Err(id_map_err) =
+            IdMapIndex::new_lazy_with_build_options(bits, with_sign(SignPolicy::Required))
+        else {
+            panic!("required lazy ID-map construction must reject unsupported sign bits");
+        };
+        assert_eq!(
+            id_map_err,
+            ConstructError::SignSidecarUnsupportedBits { bits }
+        );
+    }
+}
+
+#[test]
 fn required_lazy_commit_rejects_incompatible_dim_and_stays_lazy() {
     let mut idx = OrdinalIndex::new_lazy_with_build_options(2, with_sign(SignPolicy::Required))
         .expect("lazy construction");

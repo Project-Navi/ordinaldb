@@ -115,6 +115,8 @@ class OrdinalIndexTests(unittest.TestCase):
         self.assertFalse(OrdinalIndex(dim=4, bits=2).has_sign_sidecar)
         with self.assertRaisesRegex(ValueError, "sign policy Required"):
             OrdinalIndex(dim=4, bits=2, sign="required")
+        with self.assertRaisesRegex(ValueError, "bits 4 never supports"):
+            OrdinalIndex(bits=4, sign="required")
 
         with self.assertRaisesRegex(ValueError, "disabled"):
             OrdinalIndex(dim=64, bits=2, sign="bogus")
@@ -156,6 +158,8 @@ class IdMapIndexTests(unittest.TestCase):
         self.assertFalse(IdMapIndex(dim=4, bits=2).has_sign_sidecar)
         with self.assertRaisesRegex(ValueError, "sign policy Required"):
             IdMapIndex(dim=4, bits=2, sign="required")
+        with self.assertRaisesRegex(ValueError, "bits 4 never supports"):
+            IdMapIndex(bits=4, sign="required")
         with self.assertRaisesRegex(ValueError, "disabled"):
             IdMapIndex(dim=64, bits=2, sign="bogus")
 

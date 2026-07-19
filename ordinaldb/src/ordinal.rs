@@ -57,10 +57,11 @@ pub enum SignPolicy {
     /// Build a sign sidecar when `(dim, bits)` supports one; construct
     /// without one otherwise. This is the default.
     Optional,
-    /// Fail construction with [`ConstructError::SignSidecarUnsupported`]
-    /// when `(dim, bits)` cannot carry a sign sidecar. On a lazy index the
-    /// check runs when the first non-empty add commits `dim`, surfacing as
-    /// [`AddError::SignSidecarUnsupported`] instead.
+    /// Fail construction when `(dim, bits)` cannot carry a sign sidecar. A
+    /// lazy index rejects a bit width that can never support the sidecar up
+    /// front; for `bits == 2`, the remaining `dim` check runs when the first
+    /// non-empty add commits `dim`, surfacing as
+    /// [`AddError::SignSidecarUnsupported`].
     Required,
 }
 
@@ -389,20 +390,25 @@ impl OrdinalIndex {
 
     /// Like [`Self::new_lazy`], with explicit [`BuildOptions`].
     ///
-    /// The sign-sidecar decision is deferred to the first non-empty
-    /// [`Self::add_2d`], which commits `dim`: under
-    /// [`SignPolicy::Required`], a first batch whose `dim` cannot carry a
-    /// sidecar is rejected with [`AddError::SignSidecarUnsupported`] and
-    /// the index stays lazy.
+    /// For [`SignPolicy::Required`], bit widths that can never carry a sign
+    /// sidecar are rejected immediately. With `bits == 2`, the remaining
+    /// sign-sidecar decision is deferred to the first non-empty
+    /// [`Self::add_2d`], which commits `dim`: a batch whose `dim` cannot
+    /// carry a sidecar is rejected with
+    /// [`AddError::SignSidecarUnsupported`] and the index stays lazy.
     ///
     /// # Errors
     /// Returns [`ConstructError::UnsupportedBits`] if `bits` is not `1`,
-    /// `2`, or `4`.
+    /// `2`, or `4`, or [`ConstructError::SignSidecarUnsupportedBits`] if
+    /// [`SignPolicy::Required`] is requested with `bits` `1` or `4`.
     pub fn new_lazy_with_build_options(
         bits: u8,
         options: BuildOptions,
     ) -> Result<Self, ConstructError> {
         validate_bits(bits)?;
+        if options.sign == SignPolicy::Required && sign_required_multiple(bits).is_none() {
+            return Err(ConstructError::SignSidecarUnsupportedBits { bits });
+        }
         Ok(Self {
             dim: None,
             bits,
