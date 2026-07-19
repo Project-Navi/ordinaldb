@@ -75,7 +75,17 @@ Monday 2026-07-21.
   LanceDB's IVF-PQ serves millions-to-billions on disk; Chroma's HNSW is
   sub-ms at 1M. Above low-single-digit millions of rows, OrdinalDB's
   no-knob scan stops being a fair trade.
-- **The document/metadata lane is the bottleneck.** The 1M+ claim is for the
+- **Scale figures are measurement floors, not caps.** Nothing in the code
+  limits core rows below `u32` slot indexing (~4.29B); "1M+" is simply the
+  largest in-repo verified run (the 1.26M arXiv battle test — whose detailed
+  results table was dropped from `docs/limits.md` in the PR #13 refresh and
+  should be restored; the arxiv harness README still points at it). The
+  OrdVec substrate has been exercised at larger corpus sizes upstream, but
+  per this repo's claims discipline only ordinaldb-run measurements are
+  quotable. Extrapolating the perf-train numbers, 8M × 1024 would be a
+  ~3.1 GB bundle, ~20 ms/query scan, ~2.4 s verified open — feasible, but
+  unmeasured and therefore unclaimed.
+- **The document/metadata lane is the bottleneck.** The 1M+ figure is for the
   vector-only core bundle. The adapter directories that hold documents,
   metadata, and string IDs — i.e., what a RAG app actually uses — have a
   measured planning limit of **~100k rows**, full-rewrite saves (~1.9 s at
