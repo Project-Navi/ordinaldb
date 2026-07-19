@@ -166,9 +166,11 @@ cost scales with total store size rather than with how many records changed
 since the last save. Measured full-generation adapter save times in
 [`limits.md`](limits.md) are approximately 0.47s at 10,000 rows and 1.91s at
 100,000 rows — these figures describe the adapter-directory path, whose
-recommended planning limit is ~100,000 rows per directory. The core
-`OrdinalIndex` path is separate: it scales to 1M+ rows in a single self-contained,
-verified `.odb` bundle. Calling `save()` (or Agno's `auto_save=True`) once per inserted
+recommended planning envelope is ~100,000 rows per directory (a cost
+guideline under the current full-rewrite save model, not a correctness
+cap). The core `OrdinalIndex` path is separate: 1.26M × 1024 real-embedding
+rows are measured in a single self-contained, verified `.odb` bundle, with
+no structural row bound below `u32` slot indexing. Calling `save()` (or Agno's `auto_save=True`) once per inserted
 record therefore multiplies a cost that grows with the store, not a flat
 per-call fee — batch writes and call `save()`/`persist()`/`save_local()` once
 per batch instead of once per item.

@@ -45,15 +45,21 @@ BLAS, no learned codebook, no ANN graph — and no recall knob to get wrong.
 
 ## Scale, Measured
 
-The core index holds **1M+ rows in a single verifiable bundle**. At 2 bits per
-dimension the committed 100K-row benchmark writes a ~2.4 MB index for vectors
-that occupy 25.6 MB as raw fp32 — about 10× smaller — with a verified cold
-open in ~5 ms ([`docs/limits.md`](docs/limits.md)).
+The largest committed real-embedding run indexes **1.26M rows × 1024 dims in
+a single verifiable bundle**: a 483 MB bundle vs 5.2 GB raw fp32 (10.7×
+smaller), 3.2 ms p50 single-query search, and a 0.38 s verified cold open
+([`docs/limits.md`](docs/limits.md)). That figure is where the committed
+benchmark stops, not where the index stops — ingestion is append-only,
+search is a scan, and the only structural row bound is `u32` slot indexing
+(~4.29 billion rows). At 2 bits per dimension the committed 100K-row
+synthetic benchmark writes a ~2.4 MB index for vectors that occupy 25.6 MB
+as raw fp32, with a verified cold open in ~5 ms.
 
 Framework adapter directories — which carry documents, metadata, and string
-IDs alongside the vectors — have a measured planning guide of **~100,000 rows
-per adapter directory**. That is an adapter-lane guideline, not the core
-index's ceiling.
+IDs alongside the vectors — have a measured planning envelope of **~100,000
+rows per adapter directory**. That is a cost guideline for the adapter lane
+(full-rewrite saves, scan-based filters), not a correctness cap and not the
+core index's ceiling.
 
 ## Install
 
