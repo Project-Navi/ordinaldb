@@ -207,7 +207,12 @@ fn convenience_load_matches_open_verified_defaults() {
         Err(err) => err,
     };
     assert_eq!(load_err.kind(), std::io::ErrorKind::InvalidData);
-    assert!(load_err.to_string().contains("sign sidecar"), "{load_err}");
+    assert!(matches!(
+        load_err
+            .get_ref()
+            .and_then(|error| error.downcast_ref::<DenseError>()),
+        Some(DenseError::MissingSignSidecar)
+    ));
     cleanup(&unsigned);
 
     // Signed: both entry points load it, sidecar intact.

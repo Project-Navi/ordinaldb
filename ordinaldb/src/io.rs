@@ -614,14 +614,12 @@ fn load_bundle(path: &Path) -> io::Result<LoadedBundle> {
     // This backs the convenience `load()` entry points, which take no
     // `DenseLoadOptions`; they inherit the same default sign policy as
     // `open_verified` (`SignLoadPolicy::RequireIfSupported`).
-    // TODO(PR2): type this error surface as `DenseError` instead of an
-    // `InvalidData` `io::Error`.
     let sign = match auxiliary_path(&plan, SIGN_AUX_NAME)? {
         Some(path) => Some(SignBitmap::load(path)?),
         None if crate::ordinal::sign_compatible(metadata.dim, metadata_bits) => {
-            return Err(invalid_data(
-                "sign-capable bundle (bits=2, dim divisible by 64) has no sign sidecar; \
-                 open it with open_verified and SignLoadPolicy::Any to load without one",
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                crate::DenseError::MissingSignSidecar,
             ));
         }
         None => None,

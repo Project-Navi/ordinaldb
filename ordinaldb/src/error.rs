@@ -352,7 +352,7 @@ impl fmt::Display for DenseError {
                 f,
                 "invalid query value at query {query_index}, coord {coord_index}: {value}"
             ),
-            Self::MissingSignSidecar => f.write_str("verified dense load requires a sign sidecar"),
+            Self::MissingSignSidecar => f.write_str("operation requires a sign sidecar"),
             Self::SignSidecarForbidden => f.write_str(
                 "verified dense load forbids a sign sidecar, but the bundle declares one",
             ),
