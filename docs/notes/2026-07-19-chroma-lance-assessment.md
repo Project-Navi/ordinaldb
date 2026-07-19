@@ -22,15 +22,22 @@ Monday 2026-07-21.
     (scan-based two-stage; extrapolates to roughly ~5 ms/query at 1M rows,
     single-threaded)
   - planted-neighbor recall (query = perturbed copy of an indexed row):
-    **100/100 @1 and @10**
-  - top-10 overlap vs exact fp32 cosine: **51.7%** on this deliberately
-    adversarial corpus (i.i.d. random vectors are near-orthogonal, so top-10
-    membership is tie-breaking noise — the worst case for any quantizer).
-    The README's ~80–90% overlap claim is for real embeddings and its
-    retrieval-quality claim is nDCG@10 parity on BEIR, which this synthetic
-    test can neither confirm nor refute. The repo's framing ("different but
-    equally relevant neighbors, not float-geometry reproduction") is
-    load-bearing and honestly stated in the README.
+    **100/100 @1 and @10**. This is the only retrieval-shaped signal in the
+    smoke test: when a genuinely similar item exists, it is found.
+  - geometry non-reproduction check — **not a quality metric**: top-10
+    overlap vs exact fp32 cosine came out low on this corpus, exactly as the
+    README says it should ("does not reproduce float geometry"). i.i.d.
+    random vectors are near-orthogonal, so top-10 membership there is
+    tie-breaking noise with no relevance structure; per the project's own
+    claims discipline, exact-ANN geometry overlap is a **banned** recall
+    metric and the figure is deliberately not headlined here. It confirms
+    the design statement, nothing more.
+  - **Assessment gap, stated plainly:** the actual retrieval-quality claim —
+    nDCG@10 parity with exact dense on BEIR (lossless at `bits=4`, within
+    bootstrap noise at `bits=2`) — was **not** independently reproduced. It
+    requires real embeddings and qrels; the public harness is in-repo at
+    `benchmarks/beir-rust`. Until someone runs it, that claim is
+    repo-reported, not third-party-verified.
 - Tamper-evidence works as advertised: flipping **one byte** in
   `index.ovrq` of a written bundle makes `ordinaldb verify` report
   `artifact_sha256_mismatch` and exit 1, and `open_verified` refuses the
@@ -93,8 +100,8 @@ deployment boundary is the problem — air-gapped/edge devices, agent memory
 you need to hash/sign/audit, reproducible CI retrieval fixtures, tiny-RAM
 ARM targets — the verified single-artifact model is genuinely novel, the
 engineering quality is far above what the repo's age suggests, and every
-claim I tested held up exactly as documented, including the ones that make
-the project look worse (adversarial-corpus overlap, adapter-lane limits).
+claim I tested held up exactly as documented, including the self-limiting
+ones (no float-geometry reproduction, by design; adapter-lane limits).
 
 **Newsletter cautions (important for Monday):**
 
@@ -109,6 +116,16 @@ the project look worse (adversarial-corpus overlap, adapter-lane limits).
 4. A 1M-reader spike on a 16-day-old, one-maintainer alpha is a real
    operational risk for the project itself; expect issues volume the
    maintainer may not absorb.
+5. **Do not print any exact-cosine top-k overlap percentage as "recall" or
+   "accuracy"** — including the one measured during this assessment. Exact
+   ANN geometry is not the retrieval-relevant metric for this design (the
+   repo's claims discipline explicitly bans it), and a bare overlap number
+   will read as a quality score. The quotable quality claim is nDCG@10
+   parity on BEIR — attribute it to the project, since it has not been
+   independently reproduced here. The independently measured, safe-to-quote
+   numbers are: footprint (10.7×), latency (p50 ~1 ms @ 200k rows), verified
+   cold open (~60 ms), tamper detection (1 flipped byte → fail-closed), and
+   planted-neighbor recall (100/100).
 
 ## Reproduction
 
