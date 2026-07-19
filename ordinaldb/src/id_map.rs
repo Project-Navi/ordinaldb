@@ -147,7 +147,8 @@ impl IdMapIndex {
     ///
     /// # Errors
     /// Returns [`ConstructError::UnsupportedBits`] if `bits` is not `1`,
-    /// `2`, or `4`.
+    /// `2`, or `4`, or [`ConstructError::SignSidecarUnsupportedBits`] if
+    /// [`crate::SignPolicy::Required`] is requested with `bits` `1` or `4`.
     pub fn new_lazy_with_build_options(
         bits: u8,
         options: BuildOptions,

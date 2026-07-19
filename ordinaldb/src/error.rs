@@ -177,9 +177,11 @@ pub enum ConstructError {
     },
     /// Construction requested [`crate::SignPolicy::Required`] but `(dim,
     /// bits)` cannot carry a sign sidecar (sidecars need `bits == 2` and
-    /// `dim` a multiple of `64`). On a lazy index the same condition
-    /// surfaces on the first non-empty add as
-    /// [`crate::AddError::SignSidecarUnsupported`].
+    /// `dim` a multiple of `64`). On a lazy `bits == 2` index, an
+    /// incompatible `dim` surfaces on the first non-empty add as
+    /// [`crate::AddError::SignSidecarUnsupported`]; a lazy bit width that
+    /// can never carry a sidecar is rejected earlier as
+    /// [`Self::SignSidecarUnsupportedBits`].
     SignSidecarUnsupported {
         /// The rejected dim.
         dim: usize,
@@ -189,6 +191,14 @@ pub enum ConstructError {
         /// `bits` (see [`crate::sign_required_multiple`]), or `None` if
         /// this `bits` never supports one.
         required_multiple: Option<usize>,
+    },
+    /// Lazy construction requested [`crate::SignPolicy::Required`] with a
+    /// RankQuant bit width that can never carry a sign sidecar. Because no
+    /// eventual `dim` can make the configuration valid, this is rejected at
+    /// construction instead of being deferred to the first add.
+    SignSidecarUnsupportedBits {
+        /// The requested RankQuant bit width (`1` or `4`).
+        bits: u8,
     },
 }
 
@@ -214,6 +224,10 @@ impl fmt::Display for ConstructError {
                 bits,
                 required_multiple,
             } => write_sign_sidecar_unsupported(f, *dim, *bits, *required_multiple),
+            Self::SignSidecarUnsupportedBits { bits } => write!(
+                f,
+                "sign policy Required cannot be honored: bits {bits} never supports a sign sidecar (requires bits 2)"
+            ),
         }
     }
 }
