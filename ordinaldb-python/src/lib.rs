@@ -4,9 +4,11 @@ use ordinaldb_adapter_store::{
     acquire_writer_lock, open_verified, write_legacy_snapshot,
     write_legacy_snapshot_with_existing_lock, LegacyPayloads, StoreRevision, WriterLockGuard,
 };
+use ordinaldb_core::artifacts::MANIFEST_FILE;
+use ordinaldb_core::manifest::VerifyOptions;
 use ordinaldb_core::{
-    AddError, BuildOptions, ConstructError, DenseError, IdMapIndex, OrdinalIndex, SearchResults,
-    SignPolicy,
+    AddError, BuildOptions, ConstructError, DenseError, DenseLoadOptions, IdMapIndex, OrdinalIndex,
+    SearchResults, SignLoadPolicy, SignPolicy,
 };
 use pyo3::buffer::{Element, PyBuffer};
 use pyo3::exceptions::{PyOSError, PyValueError};
@@ -184,6 +186,9 @@ impl PyOrdinalIndex {
     ///
     /// Args:
     ///     path: Bundle directory previously produced by `write`.
+    ///     sign: Sign-sidecar load policy: "require_if_supported"
+    ///         (default), "require", "any", or "forbid". Use "any" to
+    ///         reopen an intentionally unsigned, sign-capable bundle.
     ///
     /// Returns:
     ///     A new `OrdinalIndex`.
@@ -193,11 +198,30 @@ impl PyOrdinalIndex {
     ///         different index type.
     ///     OSError: On filesystem errors.
     #[classmethod]
-    #[pyo3(text_signature = "($cls, path)")]
-    fn load(_cls: &Bound<'_, PyType>, py: Python<'_>, path: PathBuf) -> PyResult<Self> {
-        Ok(Self {
-            inner: py.detach(|| OrdinalIndex::load(path)).map_err(io_err)?,
-        })
+    #[pyo3(signature = (path, sign="require_if_supported"))]
+    #[pyo3(text_signature = "($cls, path, sign=\"require_if_supported\")")]
+    fn load(_cls: &Bound<'_, PyType>, py: Python<'_>, path: PathBuf, sign: &str) -> PyResult<Self> {
+        let sign = resolve_sign_load_policy(sign)?;
+        let inner = match sign {
+            SignLoadPolicy::RequireIfSupported => {
+                py.detach(|| OrdinalIndex::load(path)).map_err(io_err)?
+            }
+            sign => {
+                let load_options = DenseLoadOptions {
+                    sign,
+                    ..DenseLoadOptions::default()
+                };
+                py.detach(|| {
+                    OrdinalIndex::open_verified(
+                        path.join(MANIFEST_FILE),
+                        VerifyOptions::default(),
+                        load_options,
+                    )
+                })
+                .map_err(dense_err)?
+            }
+        };
+        Ok(Self { inner })
     }
 
     /// Return the number of rows stored in the index.
@@ -643,6 +667,9 @@ impl PyIdMapIndex {
     ///
     /// Args:
     ///     path: Bundle directory previously produced by `write`.
+    ///     sign: Sign-sidecar load policy: "require_if_supported"
+    ///         (default), "require", "any", or "forbid". Use "any" to
+    ///         reopen an intentionally unsigned, sign-capable bundle.
     ///
     /// Returns:
     ///     A new `IdMapIndex`.
@@ -652,11 +679,30 @@ impl PyIdMapIndex {
     ///         different index type.
     ///     OSError: On filesystem errors.
     #[classmethod]
-    #[pyo3(text_signature = "($cls, path)")]
-    fn load(_cls: &Bound<'_, PyType>, py: Python<'_>, path: PathBuf) -> PyResult<Self> {
-        Ok(Self {
-            inner: py.detach(|| IdMapIndex::load(path)).map_err(io_err)?,
-        })
+    #[pyo3(signature = (path, sign="require_if_supported"))]
+    #[pyo3(text_signature = "($cls, path, sign=\"require_if_supported\")")]
+    fn load(_cls: &Bound<'_, PyType>, py: Python<'_>, path: PathBuf, sign: &str) -> PyResult<Self> {
+        let sign = resolve_sign_load_policy(sign)?;
+        let inner = match sign {
+            SignLoadPolicy::RequireIfSupported => {
+                py.detach(|| IdMapIndex::load(path)).map_err(io_err)?
+            }
+            sign => {
+                let load_options = DenseLoadOptions {
+                    sign,
+                    ..DenseLoadOptions::default()
+                };
+                py.detach(|| {
+                    IdMapIndex::open_verified(
+                        path.join(MANIFEST_FILE),
+                        VerifyOptions::default(),
+                        load_options,
+                    )
+                })
+                .map_err(dense_err)?
+            }
+        };
+        Ok(Self { inner })
     }
 
     /// Return True if the given id is present in the index.
@@ -732,6 +778,18 @@ fn resolve_sign_policy(sign: &str) -> PyResult<SignPolicy> {
         "required" => Ok(SignPolicy::Required),
         other => Err(value_err(format!(
             "sign must be one of \"disabled\", \"optional\", or \"required\"; got {other:?}"
+        ))),
+    }
+}
+
+fn resolve_sign_load_policy(sign: &str) -> PyResult<SignLoadPolicy> {
+    match sign {
+        "require_if_supported" => Ok(SignLoadPolicy::RequireIfSupported),
+        "require" => Ok(SignLoadPolicy::Require),
+        "any" => Ok(SignLoadPolicy::Any),
+        "forbid" => Ok(SignLoadPolicy::Forbid),
+        other => Err(value_err(format!(
+            "sign must be one of \"require_if_supported\", \"require\", \"any\", or \"forbid\"; got {other:?}"
         ))),
     }
 }
