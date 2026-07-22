@@ -135,9 +135,13 @@ class OrdinalIndexTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "requires a sign sidecar"):
                 OrdinalIndex.load(path)
 
+            backup = path.parent / f".{path.name}.bak-1-1"
+            path.rename(backup)
             loaded = OrdinalIndex.load(path, sign="any")
             self.assertFalse(loaded.has_sign_sidecar)
             self.assertEqual(len(loaded), 2)
+            self.assertTrue(path.is_dir())
+            self.assertFalse(backup.exists())
 
             with self.assertRaisesRegex(ValueError, "require_if_supported"):
                 OrdinalIndex.load(path, sign="bogus")
@@ -199,10 +203,14 @@ class IdMapIndexTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "requires a sign sidecar"):
                 IdMapIndex.load(path)
 
+            backup = path.parent / f".{path.name}.bak-1-1"
+            path.rename(backup)
             loaded = IdMapIndex.load(path, sign="any")
             self.assertFalse(loaded.has_sign_sidecar)
             self.assertTrue(loaded.contains(101))
             self.assertTrue(loaded.contains(202))
+            self.assertTrue(path.is_dir())
+            self.assertFalse(backup.exists())
 
     def test_duplicate_ids_rejected_without_partial_mutation(self):
         idx = IdMapIndex(dim=4, bits=2)

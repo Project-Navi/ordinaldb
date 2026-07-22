@@ -101,6 +101,36 @@ fn any_loads_sign_capable_bundle_without_sidecar() {
 }
 
 #[test]
+fn directory_load_with_options_recovers_interrupted_publication() {
+    let bundle = write_bundle("ordinaldb-sign-load-recovery.odb", 64, SignPolicy::Disabled);
+    let backup = bundle.parent().unwrap().join(format!(
+        ".{}.bak-{}-{}",
+        bundle.file_name().unwrap().to_string_lossy(),
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::rename(&bundle, &backup).expect("simulate interrupted publication");
+
+    let loaded = OrdinalIndex::load_with_options(
+        &bundle,
+        DenseLoadOptions {
+            sign: SignLoadPolicy::Any,
+            ..DenseLoadOptions::default()
+        },
+    )
+    .expect("directory load restores a valid backup before verification");
+
+    assert!(!loaded.has_sign_sidecar());
+    assert_eq!(loaded.len(), 4);
+    assert!(bundle.join(MANIFEST_FILE).is_file());
+    assert!(!backup.exists());
+    cleanup(&bundle);
+}
+
+#[test]
 fn forbid_rejects_signed_bundle() {
     let bundle = write_bundle("ordinaldb-sign-load-forbid.odb", 64, SignPolicy::Optional);
     let err = unwrap_err(

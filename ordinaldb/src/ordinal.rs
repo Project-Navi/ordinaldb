@@ -1199,11 +1199,36 @@ impl OrdinalIndex {
     /// ID sidecar (it was written by [`crate::IdMapIndex`] — load it with
     /// [`crate::IdMapIndex::load`] instead), fails manifest verification,
     /// is a sign-capable bundle missing its sign sidecar (use
-    /// [`Self::open_verified`] with [`SignLoadPolicy::Any`] to load it
+    /// [`Self::load_with_options`] with [`SignLoadPolicy::Any`] to load it
     /// without one), or is otherwise malformed.
     pub fn load(path: impl AsRef<std::path::Path>) -> std::io::Result<Self> {
         let artifacts = crate::io::load_ordinal_bundle(path)?;
         Self::from_loaded_parts(artifacts.rankquant, artifacts.sign)
+    }
+
+    /// Load a bundle directory with default manifest verification and
+    /// caller-controlled [`DenseLoadOptions`].
+    ///
+    /// This directory-based entry point performs the same interrupted-publication
+    /// recovery as [`Self::load`] before opening the verified manifest. Use
+    /// [`Self::open_verified`] only when recovery is not desired or the manifest
+    /// is not stored at the standard bundle path.
+    ///
+    /// # Errors
+    /// Returns [`DenseError::RowIdentity`] if the verified bundle carries an ID
+    /// sidecar, or any recovery, manifest, verification, or I/O error from the
+    /// underlying load.
+    pub fn load_with_options(
+        path: impl AsRef<Path>,
+        load_options: DenseLoadOptions,
+    ) -> Result<Self, DenseError> {
+        let path = path.as_ref();
+        crate::io::recover_bundle_if_missing(path)?;
+        Self::open_verified(
+            path.join(crate::artifacts::MANIFEST_FILE),
+            VerifyOptions::default(),
+            load_options,
+        )
     }
 
     /// Load a bundle from an explicit `manifest.json` path with

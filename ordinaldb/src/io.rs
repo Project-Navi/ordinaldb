@@ -381,7 +381,7 @@ fn replace_bundle(path: &Path, temp: &Path) -> io::Result<()> {
     }
 }
 
-fn recover_bundle_if_missing(path: &Path) -> io::Result<()> {
+pub(crate) fn recover_bundle_if_missing(path: &Path) -> io::Result<()> {
     match fs::symlink_metadata(path) {
         Ok(metadata) => {
             if metadata.file_type().is_symlink() {

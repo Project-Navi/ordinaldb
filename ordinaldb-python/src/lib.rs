@@ -4,8 +4,6 @@ use ordinaldb_adapter_store::{
     acquire_writer_lock, open_verified, write_legacy_snapshot,
     write_legacy_snapshot_with_existing_lock, LegacyPayloads, StoreRevision, WriterLockGuard,
 };
-use ordinaldb_core::artifacts::MANIFEST_FILE;
-use ordinaldb_core::manifest::VerifyOptions;
 use ordinaldb_core::{
     AddError, BuildOptions, ConstructError, DenseError, DenseLoadOptions, IdMapIndex, OrdinalIndex,
     SearchResults, SignLoadPolicy, SignPolicy,
@@ -211,14 +209,8 @@ impl PyOrdinalIndex {
                     sign,
                     ..DenseLoadOptions::default()
                 };
-                py.detach(|| {
-                    OrdinalIndex::open_verified(
-                        path.join(MANIFEST_FILE),
-                        VerifyOptions::default(),
-                        load_options,
-                    )
-                })
-                .map_err(dense_err)?
+                py.detach(|| OrdinalIndex::load_with_options(path, load_options))
+                    .map_err(dense_err)?
             }
         };
         Ok(Self { inner })
@@ -692,14 +684,8 @@ impl PyIdMapIndex {
                     sign,
                     ..DenseLoadOptions::default()
                 };
-                py.detach(|| {
-                    IdMapIndex::open_verified(
-                        path.join(MANIFEST_FILE),
-                        VerifyOptions::default(),
-                        load_options,
-                    )
-                })
-                .map_err(dense_err)?
+                py.detach(|| IdMapIndex::load_with_options(path, load_options))
+                    .map_err(dense_err)?
             }
         };
         Ok(Self { inner })
