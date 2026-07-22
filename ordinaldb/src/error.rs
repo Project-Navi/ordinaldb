@@ -6,6 +6,7 @@ use std::io;
 /// [`crate::IdMapIndex`] (`add`, `add_2d`, `add_with_ids`,
 /// `add_with_ids_2d`, and the [`crate::OrdinalIndexBuilder`] wrapper).
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum AddError {
     /// `dim` is less than 2, or does not fit in a `u16`. Returned by the
     /// checked add methods before any bits-compatibility check; unlike
@@ -65,6 +66,21 @@ pub enum AddError {
     /// already present in the index, or duplicated within the same batch.
     /// The add is rejected in full (no partial insertion).
     IdAlreadyPresent(u64),
+    /// The add would commit a lazy index to a `dim` that cannot carry the
+    /// sign sidecar its [`crate::SignPolicy::Required`] build policy
+    /// demands. The batch is rejected in full and the index stays lazy;
+    /// the construction-time equivalent is
+    /// [`crate::ConstructError::SignSidecarUnsupported`].
+    SignSidecarUnsupported {
+        /// The rejected dim.
+        dim: usize,
+        /// The index's RankQuant bit width.
+        bits: u8,
+        /// The multiple `dim` must satisfy for a sign sidecar at this
+        /// `bits` (see [`crate::sign_required_multiple`]), or `None` if
+        /// this `bits` never supports one.
+        required_multiple: Option<usize>,
+    },
 }
 
 impl fmt::Display for AddError {
@@ -108,15 +124,39 @@ impl fmt::Display for AddError {
                 f,
                 "duplicate id {id}: already stored in the index or repeated within the batch"
             ),
+            Self::SignSidecarUnsupported {
+                dim,
+                bits,
+                required_multiple,
+            } => write_sign_sidecar_unsupported(f, *dim, *bits, *required_multiple),
         }
     }
 }
 
 impl Error for AddError {}
 
+fn write_sign_sidecar_unsupported(
+    f: &mut fmt::Formatter<'_>,
+    dim: usize,
+    bits: u8,
+    required_multiple: Option<usize>,
+) -> fmt::Result {
+    match required_multiple {
+        Some(multiple) => write!(
+            f,
+            "sign policy Required cannot be honored: dim {dim} is not a multiple of {multiple} (bits {bits})"
+        ),
+        None => write!(
+            f,
+            "sign policy Required cannot be honored: bits {bits} never supports a sign sidecar (requires bits 2); got dim {dim}"
+        ),
+    }
+}
+
 /// Errors returned when constructing an [`crate::OrdinalIndex`] or
 /// [`crate::IdMapIndex`] (`new`, `new_lazy`).
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ConstructError {
     /// `bits` is not `1`, `2`, or `4`. OrdinalDB restricts RankQuant to
     /// these three stable retrieval widths even though the underlying
@@ -134,6 +174,31 @@ pub enum ConstructError {
         bits: u8,
         /// Which packing/bucket invariant `dim` violated.
         reason: &'static str,
+    },
+    /// Construction requested [`crate::SignPolicy::Required`] but `(dim,
+    /// bits)` cannot carry a sign sidecar (sidecars need `bits == 2` and
+    /// `dim` a multiple of `64`). On a lazy `bits == 2` index, an
+    /// incompatible `dim` surfaces on the first non-empty add as
+    /// [`crate::AddError::SignSidecarUnsupported`]; a lazy bit width that
+    /// can never carry a sidecar is rejected earlier as
+    /// [`Self::SignSidecarUnsupportedBits`].
+    SignSidecarUnsupported {
+        /// The rejected dim.
+        dim: usize,
+        /// The requested RankQuant bit width.
+        bits: u8,
+        /// The multiple `dim` must satisfy for a sign sidecar at this
+        /// `bits` (see [`crate::sign_required_multiple`]), or `None` if
+        /// this `bits` never supports one.
+        required_multiple: Option<usize>,
+    },
+    /// Lazy construction requested [`crate::SignPolicy::Required`] with a
+    /// RankQuant bit width that can never carry a sign sidecar. Because no
+    /// eventual `dim` can make the configuration valid, this is rejected at
+    /// construction instead of being deferred to the first add.
+    SignSidecarUnsupportedBits {
+        /// The requested RankQuant bit width (`1` or `4`).
+        bits: u8,
     },
 }
 
@@ -154,6 +219,15 @@ impl fmt::Display for ConstructError {
                     "dim {dim} is not compatible with OrdVec RankQuant bits {bits}: {reason}"
                 )
             }
+            Self::SignSidecarUnsupported {
+                dim,
+                bits,
+                required_multiple,
+            } => write_sign_sidecar_unsupported(f, *dim, *bits, *required_multiple),
+            Self::SignSidecarUnsupportedBits { bits } => write!(
+                f,
+                "sign policy Required cannot be honored: bits {bits} never supports a sign sidecar (requires bits 2)"
+            ),
         }
     }
 }
@@ -170,6 +244,7 @@ impl Error for ConstructError {}
 /// (`search`, `search_with_options`, ...) surface most of the same
 /// conditions as panics instead.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum DenseError {
     /// A filesystem operation failed while writing or reading a bundle
     /// artifact.
@@ -218,10 +293,10 @@ pub enum DenseError {
     /// [`crate::ordinal::DenseSearchMode::SignTwoStage`] was requested
     /// explicitly but the index has no `SignBitmap` sidecar to generate
     /// candidates from (sign sidecars only exist for `bits == 2` indexes
-    /// with `dim` a multiple of `64`, and only when built with
-    /// `BuildOptions { sign: true }`). `DenseSearchMode::Auto` never
-    /// produces this error — it silently falls back to an exact scan
-    /// instead.
+    /// with `dim` a multiple of `64`, and only when the
+    /// [`crate::SignPolicy`] build policy allows one).
+    /// `DenseSearchMode::Auto` never produces this error — it silently
+    /// falls back to an exact scan instead.
     MissingSignSidecar,
     /// An internal consistency check failed with a human-readable
     /// `message` — for example, a verified bundle's manifest metadata

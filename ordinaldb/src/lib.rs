@@ -71,7 +71,8 @@
 //! use ordinaldb::OrdinalIndex;
 //!
 //! // 4-dimensional vectors, 2-bit RankQuant codes. For `bits == 2`, `dim`
-//! // must be a multiple of 4 (see `ConstructError::DimNotCompatibleWithBits`).
+//! // must be a multiple of 4 (preflight with `rankquant_compatible`; see
+//! // `ConstructError::DimNotCompatibleWithBits`).
 //! let mut index = OrdinalIndex::new(4, 2)?;
 //!
 //! // Two row-major vectors, back to back.
@@ -131,7 +132,9 @@ mod io;
 pub use error::{AddError, ConstructError, DenseError};
 pub use id_map::{IdMapIndex, IdMapSearchReport};
 pub use ordinal::{
+    rankquant_compatible, rankquant_required_multiple, sign_compatible, sign_required_multiple,
     BuildOptions, DenseBundleInspectReport, DenseLoadOptions, DenseSearchExecution,
     DenseSearchMode, DenseSearchOptions, DenseSearchPlan, DenseSearchReport, DenseSearchTimings,
-    OrdinalIndex, OrdinalIndexBuilder, SearchResults, TwoStageOptions, VerifiedBundleReport,
+    OrdinalIndex, OrdinalIndexBuilder, SearchResults, SignPolicy, TwoStageOptions,
+    VerifiedBundleReport,
 };

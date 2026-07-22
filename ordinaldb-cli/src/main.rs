@@ -2778,7 +2778,7 @@ mod tests {
     fn write_hybrid_ltr_core_bundle(bundle: &Path, scratch: &Path) {
         use ordinaldb::hybrid::{SparseIndexBuilder, TokenizerKind};
         use ordinaldb::manifest::{AuxiliaryArtifactDeclaration, CreateManifestOptions};
-        use ordinaldb::{BuildOptions, OrdinalIndexBuilder};
+        use ordinaldb::{BuildOptions, OrdinalIndexBuilder, SignPolicy};
 
         std::fs::create_dir_all(scratch).unwrap();
         let sparse_source = scratch.join("sparse.bm25");
@@ -2807,7 +2807,14 @@ mod tests {
         std::fs::write(&model_source, serde_json::to_vec_pretty(&model).unwrap()).unwrap();
 
         let dim = 8usize;
-        let mut dense = OrdinalIndexBuilder::new(dim, 2, BuildOptions { sign: false }).unwrap();
+        let mut dense = OrdinalIndexBuilder::new(
+            dim,
+            2,
+            BuildOptions {
+                sign: SignPolicy::Disabled,
+            },
+        )
+        .unwrap();
         for (idx, &row_id) in HYBRID_FIXTURE_ROW_IDS.iter().enumerate() {
             let vector: Vec<f32> = (0..dim)
                 .map(|col| ((idx + 1) * (col + 2)) as f32 / 10.0)

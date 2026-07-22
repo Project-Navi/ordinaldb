@@ -35,7 +35,7 @@ const TWO_STAGE_MAX_SCORE_CELLS: usize = 1_048_576;
 /// IDs that stay stable across deletions.
 ///
 /// When `bits == 2` and `dim` is a multiple of `64` (and
-/// [`BuildOptions::sign`] is `true`), the index also maintains a
+/// [`BuildOptions::sign`] permits one), the index also maintains a
 /// `SignBitmap` sidecar used by [`DenseSearchMode::SignTwoStage`] to
 /// generate a candidate shortlist before an exact RankQuant rerank.
 pub struct OrdinalIndex {
@@ -43,22 +43,43 @@ pub struct OrdinalIndex {
     bits: u8,
     inner: Option<RankQuant>,
     sign: Option<SignBitmap>,
-    sign_enabled: bool,
+    sign_policy: SignPolicy,
+}
+
+/// Policy controlling whether an index builds and maintains a `SignBitmap`
+/// sidecar for two-stage search. A sidecar is only *possible* when
+/// `bits == 2` and `dim` is a multiple of `64` (see [`sign_compatible`]);
+/// the policy decides what happens when `(dim, bits)` cannot carry one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SignPolicy {
+    /// Never build a sign sidecar, even when `(dim, bits)` supports one.
+    Disabled,
+    /// Build a sign sidecar when `(dim, bits)` supports one; construct
+    /// without one otherwise. This is the default.
+    Optional,
+    /// Fail construction when `(dim, bits)` cannot carry a sign sidecar. A
+    /// lazy index rejects a bit width that can never support the sidecar up
+    /// front; for `bits == 2`, the remaining `dim` check runs when the first
+    /// non-empty add commits `dim`, surfacing as
+    /// [`AddError::SignSidecarUnsupported`].
+    Required,
 }
 
 /// Options controlling how a new index is built.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BuildOptions {
     /// Whether to build and maintain a `SignBitmap` sidecar for two-stage
-    /// search. Even when `true`, the sidecar is only actually created when
-    /// `bits == 2` and `dim` is a multiple of `64`; other `(dim, bits)`
-    /// combinations silently have no sign sidecar regardless of this flag.
-    pub sign: bool,
+    /// search, and what to do when `(dim, bits)` cannot carry one — see
+    /// [`SignPolicy`]. Use [`sign_compatible`] to check a `(dim, bits)`
+    /// pair up front.
+    pub sign: SignPolicy,
 }
 
 impl Default for BuildOptions {
     fn default() -> Self {
-        Self { sign: true }
+        Self {
+            sign: SignPolicy::Optional,
+        }
     }
 }
 
@@ -83,7 +104,9 @@ pub enum DenseSearchMode {
     /// Use the sign sidecar's two-stage candidate generation if the index
     /// has one; otherwise silently fall back to an exact RankQuant scan.
     /// This fallback never surfaces as an error or panic, even through the
-    /// panicking search entry points.
+    /// panicking search entry points — use
+    /// [`OrdinalIndex::search_with_report`] to see which strategy actually
+    /// ran ([`DenseSearchPlan::execution`]).
     #[default]
     Auto,
     /// Always brute-force score every vector's RankQuant code, ignoring
@@ -95,7 +118,8 @@ pub enum DenseSearchMode {
     /// [`DenseError::MissingSignSidecar`] if the index has none, while the
     /// panicking `search`/`search_with_options` fall back to
     /// [`Self::ExactRankQuant`] instead of panicking in that specific
-    /// case.
+    /// case (with no report of the downgrade — use
+    /// [`OrdinalIndex::search_with_report`] for execution visibility).
     SignTwoStage,
 }
 
@@ -327,38 +351,70 @@ impl OrdinalIndex {
         Self::new_with_build_options(dim, bits, BuildOptions::default())
     }
 
-    pub(crate) fn new_with_build_options(
+    /// Construct an empty index with a fixed `dim` and RankQuant `bits`,
+    /// with explicit [`BuildOptions`].
+    ///
+    /// # Errors
+    /// Returns [`ConstructError`] if `bits` is unsupported, `dim` is
+    /// invalid or incompatible with `bits`, or
+    /// [`ConstructError::SignSidecarUnsupported`] when
+    /// [`SignPolicy::Required`] cannot be honored for `(dim, bits)`.
+    pub fn new_with_build_options(
         dim: usize,
         bits: u8,
         options: BuildOptions,
     ) -> Result<Self, ConstructError> {
         validate_bits(bits)?;
         validate_dim_bits(dim, bits)?;
+        let sign = maybe_new_sign(dim, bits, options.sign)?;
         Ok(Self {
             dim: Some(dim),
             bits,
             inner: Some(RankQuant::new(dim, bits)),
-            sign: maybe_new_sign(dim, bits, options.sign),
-            sign_enabled: options.sign,
+            sign,
+            sign_policy: options.sign,
         })
     }
 
     /// Construct an empty index with `bits` fixed but `dim` left
     /// undetermined; `dim` is inferred from the first non-empty batch
-    /// passed to [`Self::add_2d`]. A sign sidecar (if the eventual `dim`
-    /// supports one) is enabled by default.
+    /// passed to [`Self::add_2d`]. The default [`SignPolicy::Optional`]
+    /// applies: a sign sidecar is built if the eventual `dim` supports one.
     ///
     /// # Errors
     /// Returns [`ConstructError::UnsupportedBits`] if `bits` is not `1`,
     /// `2`, or `4`.
     pub fn new_lazy(bits: u8) -> Result<Self, ConstructError> {
+        Self::new_lazy_with_build_options(bits, BuildOptions::default())
+    }
+
+    /// Like [`Self::new_lazy`], with explicit [`BuildOptions`].
+    ///
+    /// For [`SignPolicy::Required`], bit widths that can never carry a sign
+    /// sidecar are rejected immediately. With `bits == 2`, the remaining
+    /// sign-sidecar decision is deferred to the first non-empty
+    /// [`Self::add_2d`], which commits `dim`: a batch whose `dim` cannot
+    /// carry a sidecar is rejected with
+    /// [`AddError::SignSidecarUnsupported`] and the index stays lazy.
+    ///
+    /// # Errors
+    /// Returns [`ConstructError::UnsupportedBits`] if `bits` is not `1`,
+    /// `2`, or `4`, or [`ConstructError::SignSidecarUnsupportedBits`] if
+    /// [`SignPolicy::Required`] is requested with `bits` `1` or `4`.
+    pub fn new_lazy_with_build_options(
+        bits: u8,
+        options: BuildOptions,
+    ) -> Result<Self, ConstructError> {
         validate_bits(bits)?;
+        if options.sign == SignPolicy::Required && sign_required_multiple(bits).is_none() {
+            return Err(ConstructError::SignSidecarUnsupportedBits { bits });
+        }
         Ok(Self {
             dim: None,
             bits,
             inner: None,
             sign: None,
-            sign_enabled: true,
+            sign_policy: options.sign,
         })
     }
 
@@ -445,6 +501,10 @@ impl OrdinalIndex {
     ///   different `dim`.
     /// - [`AddError::InvalidInputValue`] if a coordinate is not finite or
     ///   has magnitude `>= 1e16`.
+    /// - [`AddError::SignSidecarUnsupported`] if this add commits `dim` on
+    ///   a lazy index built with [`SignPolicy::Required`] and `(dim,
+    ///   bits)` cannot carry a sign sidecar; the batch is rejected in full
+    ///   and the index stays lazy.
     pub fn add_2d(&mut self, vectors: &[f32], dim: usize) -> Result<(), AddError> {
         validate_add_dim_bits(dim, self.bits)?;
         if !vectors.len().is_multiple_of(dim) {
@@ -475,8 +535,17 @@ impl OrdinalIndex {
         }
 
         if self.inner.is_none() {
+            // Committing dim: enforce the sign policy before mutating
+            // anything, so a rejected batch leaves the index lazy.
+            let sign = maybe_new_sign(dim, self.bits, self.sign_policy).map_err(|_| {
+                AddError::SignSidecarUnsupported {
+                    dim,
+                    bits: self.bits,
+                    required_multiple: sign_required_multiple(self.bits),
+                }
+            })?;
             self.inner = Some(RankQuant::new(dim, self.bits));
-            self.sign = maybe_new_sign(dim, self.bits, self.sign_enabled);
+            self.sign = sign;
             self.dim = Some(dim);
         }
         self.inner
@@ -1157,7 +1226,7 @@ impl OrdinalIndex {
         validate_dim_bits(dim, bits)
             .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err.to_string()))?;
         if let Some(sign) = &sign {
-            if bits != 2 || !dim.is_multiple_of(64) {
+            if !sign_compatible(dim, bits) {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
                     "sign sidecar is only valid for bits=2 and dim divisible by 64",
@@ -1181,7 +1250,10 @@ impl OrdinalIndex {
             bits,
             inner: Some(rankquant),
             sign,
-            sign_enabled: true,
+            // A loaded index's sidecar decision is already made; the
+            // policy only matters for a lazy first add, which a loaded
+            // (dim-committed) index never performs.
+            sign_policy: SignPolicy::Optional,
         })
     }
 
@@ -1206,57 +1278,110 @@ fn validate_bits(bits: u8) -> Result<(), ConstructError> {
     }
 }
 
-fn validate_dim_bits(dim: usize, bits: u8) -> Result<(), ConstructError> {
+/// The RankQuant packing (`8 / bits`) and bucket-balance (`2^bits`)
+/// moduli for a supported `bits`. Callers must have validated `bits`.
+fn rankquant_moduli(bits: u8) -> (usize, usize) {
+    ((8 / bits) as usize, 1usize << bits)
+}
+
+/// Which `(dim, bits)` shape constraint a pair violates. The single source
+/// of the modulus math shared by [`validate_dim_bits`],
+/// [`validate_add_dim_bits`], and the preflight helpers.
+enum DimBitsViolation {
+    DimOutOfRange,
+    NotCompatible(&'static str),
+}
+
+fn check_dim_bits(dim: usize, bits: u8) -> Result<(), DimBitsViolation> {
     if dim < 2 || dim > u16::MAX as usize {
-        return Err(ConstructError::DimInvalid(dim));
+        return Err(DimBitsViolation::DimOutOfRange);
     }
-
-    let codes_per_byte = (8 / bits) as usize;
+    let (codes_per_byte, buckets) = rankquant_moduli(bits);
     if !dim.is_multiple_of(codes_per_byte) {
-        return Err(ConstructError::DimNotCompatibleWithBits {
-            dim,
-            bits,
-            reason: "dim must be divisible by 8 / bits for packed RankQuant storage",
-        });
+        return Err(DimBitsViolation::NotCompatible(
+            "dim must be divisible by 8 / bits for packed RankQuant storage",
+        ));
     }
-
-    let buckets = 1usize << bits;
     if !dim.is_multiple_of(buckets) {
-        return Err(ConstructError::DimNotCompatibleWithBits {
-            dim,
-            bits,
-            reason: "dim must be divisible by 2^bits for RankQuant bucket balance",
-        });
+        return Err(DimBitsViolation::NotCompatible(
+            "dim must be divisible by 2^bits for RankQuant bucket balance",
+        ));
     }
-
     Ok(())
 }
 
-fn maybe_new_sign(dim: usize, bits: u8, enabled: bool) -> Option<SignBitmap> {
-    (enabled && bits == 2 && dim.is_multiple_of(64)).then(|| SignBitmap::new(dim))
+fn validate_dim_bits(dim: usize, bits: u8) -> Result<(), ConstructError> {
+    check_dim_bits(dim, bits).map_err(|violation| match violation {
+        DimBitsViolation::DimOutOfRange => ConstructError::DimInvalid(dim),
+        DimBitsViolation::NotCompatible(reason) => {
+            ConstructError::DimNotCompatibleWithBits { dim, bits, reason }
+        }
+    })
 }
 
 fn validate_add_dim_bits(dim: usize, bits: u8) -> Result<(), AddError> {
-    if dim < 2 || dim > u16::MAX as usize {
-        return Err(AddError::DimInvalid(dim));
+    check_dim_bits(dim, bits).map_err(|violation| match violation {
+        DimBitsViolation::DimOutOfRange => AddError::DimInvalid(dim),
+        DimBitsViolation::NotCompatible(reason) => {
+            AddError::DimNotCompatibleWithBits { dim, bits, reason }
+        }
+    })
+}
+
+/// The multiple `dim` must satisfy for RankQuant codes at `bits` — the
+/// least common multiple of the packing (`8 / bits`) and bucket-balance
+/// (`2^bits`) constraints — or `None` if `bits` is not one of OrdinalDB's
+/// supported widths (`1`, `2`, or `4`).
+pub fn rankquant_required_multiple(bits: u8) -> Option<usize> {
+    if validate_bits(bits).is_err() {
+        return None;
     }
-    let codes_per_byte = (8 / bits) as usize;
-    if !dim.is_multiple_of(codes_per_byte) {
-        return Err(AddError::DimNotCompatibleWithBits {
+    let (codes_per_byte, buckets) = rankquant_moduli(bits);
+    // Both moduli are powers of two, so their lcm is the larger one.
+    Some(codes_per_byte.max(buckets))
+}
+
+/// Returns `true` if an index can be constructed with this `(dim, bits)`
+/// pair: `bits` is supported, `dim` is in range (`2..=u16::MAX`), and
+/// `dim` is a multiple of [`rankquant_required_multiple`].
+pub fn rankquant_compatible(dim: usize, bits: u8) -> bool {
+    validate_bits(bits).is_ok() && check_dim_bits(dim, bits).is_ok()
+}
+
+/// The multiple `dim` must satisfy for a `SignBitmap` sidecar at `bits`
+/// (`64`, for `bits == 2`), or `None` if `bits` never supports one.
+pub fn sign_required_multiple(bits: u8) -> Option<usize> {
+    (bits == 2).then_some(64)
+}
+
+/// Returns `true` if an index with this `(dim, bits)` pair can carry a
+/// `SignBitmap` sidecar: the pair is [`rankquant_compatible`] and `dim`
+/// is a multiple of [`sign_required_multiple`].
+pub fn sign_compatible(dim: usize, bits: u8) -> bool {
+    rankquant_compatible(dim, bits)
+        && sign_required_multiple(bits).is_some_and(|multiple| dim.is_multiple_of(multiple))
+}
+
+/// Resolve `policy` for a committed `(dim, bits)`: `Ok(Some)` when a
+/// sidecar is built, `Ok(None)` when the policy or `(dim, bits)` opts
+/// out, and [`ConstructError::SignSidecarUnsupported`] when
+/// [`SignPolicy::Required`] cannot be honored.
+fn maybe_new_sign(
+    dim: usize,
+    bits: u8,
+    policy: SignPolicy,
+) -> Result<Option<SignBitmap>, ConstructError> {
+    let compatible = sign_compatible(dim, bits);
+    match policy {
+        SignPolicy::Disabled => Ok(None),
+        SignPolicy::Optional => Ok(compatible.then(|| SignBitmap::new(dim))),
+        SignPolicy::Required if compatible => Ok(Some(SignBitmap::new(dim))),
+        SignPolicy::Required => Err(ConstructError::SignSidecarUnsupported {
             dim,
             bits,
-            reason: "dim must be divisible by 8 / bits for packed RankQuant storage",
-        });
+            required_multiple: sign_required_multiple(bits),
+        }),
     }
-    let buckets = 1usize << bits;
-    if !dim.is_multiple_of(buckets) {
-        return Err(AddError::DimNotCompatibleWithBits {
-            dim,
-            bits,
-            reason: "dim must be divisible by 2^bits for RankQuant bucket balance",
-        });
-    }
-    Ok(())
 }
 
 fn first_invalid_coord(values: &[f32], dim: usize) -> Option<(usize, usize, f32)> {

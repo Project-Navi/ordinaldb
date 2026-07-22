@@ -108,7 +108,7 @@ impl HybridBundle {
     ///     rrf_fuse_batch, HybridBundle, RrfConfig, SparseIndexBuilder, TokenizerKind,
     /// };
     /// use ordinaldb::manifest::{AuxiliaryArtifactDeclaration, CreateManifestOptions, VerifyOptions};
-    /// use ordinaldb::{BuildOptions, DenseLoadOptions, OrdinalIndexBuilder};
+    /// use ordinaldb::{BuildOptions, DenseLoadOptions, OrdinalIndexBuilder, SignPolicy};
     ///
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// # let dir = std::env::temp_dir().join(format!(
@@ -132,7 +132,7 @@ impl HybridBundle {
     /// }
     /// sparse.write_mmap(&sparse_path)?;
     ///
-    /// let mut dense = OrdinalIndexBuilder::new(8, 2, BuildOptions { sign: false })?;
+    /// let mut dense = OrdinalIndexBuilder::new(8, 2, BuildOptions { sign: SignPolicy::Disabled })?;
     /// for (slot, &row_id) in ids.iter().enumerate() {
     ///     let vector: Vec<f32> = (0..8).map(|col| ((slot + 1) * (col + 2)) as f32).collect();
     ///     dense.add(row_id, &vector)?;

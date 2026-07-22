@@ -8,6 +8,7 @@ use ordinaldb::hybrid::{
 use ordinaldb::manifest::{AuxiliaryArtifactDeclaration, CreateManifestOptions, VerifyOptions};
 use ordinaldb::{
     BuildOptions, DenseError, DenseLoadOptions, IdMapIndex, OrdinalIndex, OrdinalIndexBuilder,
+    SignPolicy,
 };
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -16,7 +17,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 #[test]
 fn verified_idmap_bundle_loads_dense_and_sparse_with_stable_row_ids() {
     let ids = [10, 20, 30, 40];
-    let (bundle, sparse_source) = write_bundle_with_sparse(&ids, &ids, true);
+    let (bundle, sparse_source) = write_bundle_with_sparse(&ids, &ids, SignPolicy::Optional);
     let manifest_path = bundle.join(MANIFEST_FILE);
 
     let dense = IdMapIndex::open_verified(
@@ -51,7 +52,7 @@ fn verified_idmap_bundle_loads_dense_and_sparse_with_stable_row_ids() {
 fn verified_sparse_sidecar_rejects_wrong_stable_row_ids() {
     let ids = [10, 20, 30];
     let sparse_ids = [10, 999, 30];
-    let (bundle, sparse_source) = write_bundle_with_sparse(&ids, &sparse_ids, true);
+    let (bundle, sparse_source) = write_bundle_with_sparse(&ids, &sparse_ids, SignPolicy::Optional);
     let manifest_path = bundle.join(MANIFEST_FILE);
 
     let err = match Bm25MmapIndex::open_verified_sidecar(
@@ -75,7 +76,7 @@ fn verified_sparse_sidecar_rejects_wrong_stable_row_ids() {
 #[test]
 fn verified_dense_load_can_require_sign_sidecar() {
     let ids = [0, 1, 2];
-    let (bundle, sparse_source) = write_bundle_with_sparse(&ids, &ids, false);
+    let (bundle, sparse_source) = write_bundle_with_sparse(&ids, &ids, SignPolicy::Disabled);
     let manifest_path = bundle.join(MANIFEST_FILE);
 
     let err = match IdMapIndex::open_verified(
@@ -102,8 +103,14 @@ fn verified_bundle_rejects_reserved_auxiliary_name() {
     let aux = write_aux_source("ordinaldb-boundary-reserved-aux.bin", b"sidecar");
     cleanup(&bundle);
 
-    let mut builder =
-        OrdinalIndexBuilder::new(64, 2, BuildOptions { sign: true }).expect("dense builder");
+    let mut builder = OrdinalIndexBuilder::new(
+        64,
+        2,
+        BuildOptions {
+            sign: SignPolicy::Optional,
+        },
+    )
+    .expect("dense builder");
     builder.add(1, &vectors(1, 64)).expect("add vector");
     let err = builder
         .write_verified_bundle(
@@ -129,8 +136,14 @@ fn verified_bundle_rejects_duplicate_auxiliary_bundle_path() {
     let aux_b = write_aux_source("ordinaldb-boundary-duplicate-aux-b.bin", b"b");
     cleanup(&bundle);
 
-    let mut builder =
-        OrdinalIndexBuilder::new(64, 2, BuildOptions { sign: false }).expect("dense builder");
+    let mut builder = OrdinalIndexBuilder::new(
+        64,
+        2,
+        BuildOptions {
+            sign: SignPolicy::Disabled,
+        },
+    )
+    .expect("dense builder");
     builder.add(1, &vectors(1, 64)).expect("add vector");
     let err = builder
         .write_verified_bundle(
@@ -177,8 +190,14 @@ fn declared_but_unloadable_sign_sidecar_is_not_reported_missing() {
     let bundle = temp_path("ordinaldb-boundary-unloadable-sign.odb");
     cleanup(&bundle);
 
-    let mut builder =
-        OrdinalIndexBuilder::new(64, 2, BuildOptions { sign: true }).expect("dense builder");
+    let mut builder = OrdinalIndexBuilder::new(
+        64,
+        2,
+        BuildOptions {
+            sign: SignPolicy::Optional,
+        },
+    )
+    .expect("dense builder");
     builder.add(1, &vectors(1, 64)).expect("add vector");
     builder
         .write_verified_bundle(&bundle, CreateManifestOptions::default(), Vec::new())
@@ -205,7 +224,7 @@ fn declared_but_unloadable_sign_sidecar_is_not_reported_missing() {
 #[test]
 fn batch_dense_sparse_and_rrf_preserve_per_query_allowlists() {
     let ids = [10, 20, 30, 40];
-    let (bundle, sparse_source) = write_bundle_with_sparse(&ids, &ids, true);
+    let (bundle, sparse_source) = write_bundle_with_sparse(&ids, &ids, SignPolicy::Optional);
     let manifest_path = bundle.join(MANIFEST_FILE);
     let dense = IdMapIndex::open_verified(
         &manifest_path,
@@ -293,7 +312,7 @@ fn batch_dense_sparse_and_rrf_preserve_per_query_allowlists() {
 #[test]
 fn hybrid_bundle_open_verified_returns_dense_and_sparse_from_one_manifest() {
     let ids = [10, 20, 30, 40];
-    let (bundle, sparse_source) = write_bundle_with_sparse(&ids, &ids, true);
+    let (bundle, sparse_source) = write_bundle_with_sparse(&ids, &ids, SignPolicy::Optional);
     let manifest_path = bundle.join(MANIFEST_FILE);
 
     let opened = HybridBundle::open_verified(
@@ -336,7 +355,7 @@ fn hybrid_bundle_open_verified_returns_dense_and_sparse_from_one_manifest() {
 #[test]
 fn hybrid_bundle_open_verified_reports_dense_and_sparse_failures_distinctly() {
     let ids = [10, 20, 30];
-    let (bundle, sparse_source) = write_bundle_with_sparse(&ids, &ids, true);
+    let (bundle, sparse_source) = write_bundle_with_sparse(&ids, &ids, SignPolicy::Optional);
     let manifest_path = bundle.join(MANIFEST_FILE);
 
     let dense_err = match HybridBundle::open_verified(
@@ -382,7 +401,7 @@ fn hybrid_bundle_open_verified_reports_dense_and_sparse_failures_distinctly() {
 fn write_bundle_with_sparse(
     dense_ids: &[u64],
     sparse_ids: &[u64],
-    sign: bool,
+    sign: SignPolicy,
 ) -> (PathBuf, PathBuf) {
     assert_eq!(dense_ids.len(), sparse_ids.len());
     let dim = 64;
