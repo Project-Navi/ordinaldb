@@ -611,8 +611,17 @@ fn load_bundle(path: &Path) -> io::Result<LoadedBundle> {
         ));
     }
 
+    // This backs the convenience `load()` entry points, which take no
+    // `DenseLoadOptions`; they inherit the same default sign policy as
+    // `open_verified` (`SignLoadPolicy::RequireIfSupported`).
     let sign = match auxiliary_path(&plan, SIGN_AUX_NAME)? {
         Some(path) => Some(SignBitmap::load(path)?),
+        None if crate::ordinal::sign_compatible(metadata.dim, metadata_bits) => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                crate::DenseError::MissingSignSidecar,
+            ));
+        }
         None => None,
     };
     let ids_path = auxiliary_path(&plan, IDS_AUX_NAME)?;

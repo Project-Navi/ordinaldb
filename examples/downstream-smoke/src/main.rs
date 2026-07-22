@@ -3,7 +3,9 @@ use ordinaldb::hybrid::{
     rrf_fuse_batch, Bm25MmapIndex, RrfConfig, SparseIndexBuilder, TokenizerKind,
 };
 use ordinaldb::manifest::{AuxiliaryArtifactDeclaration, CreateManifestOptions, VerifyOptions};
-use ordinaldb::{BuildOptions, DenseLoadOptions, IdMapIndex, OrdinalIndexBuilder, SignPolicy};
+use ordinaldb::{
+    BuildOptions, DenseLoadOptions, IdMapIndex, OrdinalIndexBuilder, SignLoadPolicy, SignPolicy,
+};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -37,7 +39,7 @@ fn main() {
         .expect("write sparse mmap");
 
     // dim=64 is sign-capable; Required fails fast instead of silently
-    // writing a bundle the require_sign load below would reject.
+    // writing a bundle the Require-policy load below would reject.
     let mut dense_builder = OrdinalIndexBuilder::new(
         dim,
         2,
@@ -70,7 +72,7 @@ fn main() {
         &manifest_path,
         VerifyOptions::default(),
         DenseLoadOptions {
-            require_sign: true,
+            sign: SignLoadPolicy::Require,
             expected_dim: Some(dim),
             expected_bits: Some(2),
         },
