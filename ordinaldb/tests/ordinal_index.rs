@@ -176,6 +176,7 @@ fn sign_two_stage_mode_requires_sign_sidecar() {
         Err(err) => err,
     };
     assert!(matches!(err, DenseError::MissingSignSidecar), "{err}");
+    assert_eq!(err.to_string(), "operation requires a sign sidecar");
 }
 
 #[test]
