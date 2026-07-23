@@ -9,6 +9,7 @@
 //! glue ([`crate::manifest::AuxiliaryArtifactDeclaration`] and the
 //! size-limit helpers below).
 
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
@@ -162,10 +163,27 @@ impl VerifiedAuxiliaryArtifactExt for VerifiedAuxiliaryArtifactReport {
                 self.name()
             )))
         })?;
-        let bytes =
-            std::fs::read(path).map_err(|err| VerificationError::from(ManifestError::from(err)))?;
+        // Without a recorded size there is nothing to bound the read against;
+        // an unbounded `std::fs::read` of a swapped-in huge file would exhaust
+        // memory before any mismatch is caught, so refuse instead.
+        let expected_size = self.size_bytes().ok_or_else(|| {
+            VerificationError::from(ManifestError::invalid(format!(
+                "auxiliary artifact {:?} has no recorded size to bound the re-read against",
+                self.name()
+            )))
+        })?;
+        // Bounded read: take at most `recorded_size + 1` bytes so a
+        // post-verification swap to a huge file cannot allocate past the
+        // recorded size. The extra byte lets a too-large file be rejected by
+        // length without ever reading it whole.
+        let file =
+            std::fs::File::open(path).map_err(|err| VerificationError::from(ManifestError::from(err)))?;
+        let mut bytes = Vec::new();
+        file.take(expected_size.saturating_add(1))
+            .read_to_end(&mut bytes)
+            .map_err(|err| VerificationError::from(ManifestError::from(err)))?;
         // Length is the cheap first discriminator; SHA-256 is authoritative.
-        if self.size_bytes().is_some_and(|len| len != bytes.len() as u64) {
+        if bytes.len() as u64 != expected_size {
             return Err(sha256_reverification_failed(self.name()));
         }
         let digest = hex::encode(Sha256::digest(&bytes));
@@ -235,6 +253,42 @@ mod tests {
         let err = ids_aux
             .read_verified()
             .expect_err("mutated bytes must fail re-verification");
+        let message = err.to_string().to_lowercase();
+        assert!(
+            message.contains("sha") || message.contains("verif"),
+            "unexpected error: {err}"
+        );
+
+        let _ = std::fs::remove_dir_all(&bundle);
+    }
+
+    #[test]
+    fn read_verified_rejects_oversized_swap_without_reading_it_whole() {
+        let bundle = temp_bundle("read-verified-oversized");
+        let _ = std::fs::remove_dir_all(&bundle);
+        write_idmap_bundle(&bundle);
+
+        let plan =
+            verify_for_load(bundle.join("manifest.json"), VerifyOptions::default()).unwrap();
+        let ids_aux = plan
+            .auxiliary_by_name(crate::artifacts::IDS_AUX_NAME)
+            .expect("ID sidecar is a declared auxiliary artifact");
+        let ids_path = ids_aux.path().unwrap().to_path_buf();
+        let recorded_size = ids_aux.size_bytes().expect("verified aux records a size");
+
+        // Swap the file for one far larger than the recorded size. The read is
+        // capped at `recorded_size + 1` via `Read::take`, so it never allocates
+        // near this file's true length — it is rejected by the length check
+        // after reading only one byte past the recorded size. (The allocation
+        // cap itself is guaranteed by construction; it cannot be asserted from
+        // within the process without an allocator hook, so this test exercises
+        // the oversized-swap rejection path rather than measuring bytes read.)
+        let oversized = vec![0u8; (recorded_size as usize) + 8 * 1024 * 1024];
+        std::fs::write(&ids_path, &oversized).unwrap();
+
+        let err = ids_aux
+            .read_verified()
+            .expect_err("oversized swap must fail re-verification");
         let message = err.to_string().to_lowercase();
         assert!(
             message.contains("sha") || message.contains("verif"),
