@@ -7,11 +7,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use ordvec::{RankQuant, SignBitmap, SubsetScratch};
-use ordvec_manifest::{ManifestIndexKind, ManifestIndexParams, VerifyOptions};
+use ordvec_manifest::{ManifestIndexKind, ManifestIndexParams, VerifiedLoadPlan, VerifyOptions};
 use rayon::prelude::*;
 
 use crate::id_map::IdMapIndex;
-use crate::manifest::AuxiliaryArtifactDeclaration;
+use crate::manifest::{AuxiliaryArtifactDeclaration, VerifiedAuxiliaryArtifactExt};
 use crate::{AddError, ConstructError, DenseError};
 
 /// Top-k search results, laid out as `nq` contiguous blocks of `k`, sorted
@@ -1886,6 +1886,132 @@ pub(crate) fn load_verified_ordinal_parts(
 ) -> Result<(RankQuant, Option<SignBitmap>, Option<PathBuf>), DenseError> {
     let loaded = load_verified_bundle(manifest_path, verify_options, load_options)?;
     Ok((loaded.rankquant, loaded.sign, loaded.ids_path))
+}
+
+/// Load the dense parts (primary RankQuant + optional sign sidecar) from an
+/// already-verified [`VerifiedLoadPlan`], instead of re-running
+/// `verify_for_load`. Before each artifact is loaded its on-disk bytes are
+/// re-hashed against the digest the plan recorded, so reusing a stale plan
+/// over mutable storage is rejected rather than trusted — this is the
+/// freshness re-check that the sparse
+/// `open_from_verified_plan_unchecked_freshness` deliberately skips.
+pub(crate) fn load_verified_parts_from_plan(
+    plan: &VerifiedLoadPlan,
+    load_options: DenseLoadOptions,
+) -> Result<(RankQuant, Option<SignBitmap>), DenseError> {
+    let metadata = plan.metadata();
+    if metadata.kind != ManifestIndexKind::RankQuant {
+        return Err(DenseError::metadata_mismatch(format!(
+            "OrdinalDB dense bundles require a RankQuant primary artifact; got {:?}",
+            metadata.kind
+        )));
+    }
+    let ManifestIndexParams::RankQuant {
+        bits: metadata_bits,
+    } = metadata.params
+    else {
+        return Err(DenseError::metadata_mismatch(
+            "OrdinalDB dense bundle primary artifact has non-RankQuant params",
+        ));
+    };
+    if let Some(expected_dim) = load_options.expected_dim {
+        if metadata.dim != expected_dim {
+            return Err(DenseError::metadata_mismatch(format!(
+                "verified dense dim {} does not match expected dim {expected_dim}",
+                metadata.dim
+            )));
+        }
+    }
+    if let Some(expected_bits) = load_options.expected_bits {
+        if metadata_bits != expected_bits {
+            return Err(DenseError::metadata_mismatch(format!(
+                "verified dense bits {metadata_bits} does not match expected bits {expected_bits}"
+            )));
+        }
+    }
+    if plan.row_identity().kind() != "row_id_identity" {
+        return Err(DenseError::row_identity(format!(
+            "OrdinalDB dense bundles currently require row_id_identity row identity; got {:?}",
+            plan.row_identity().kind()
+        )));
+    }
+
+    reverify_primary_freshness(
+        plan.artifact_path(),
+        plan.report().artifact.sha256.as_deref(),
+    )?;
+    let rankquant = RankQuant::load(plan.artifact_path())?;
+    if metadata.dim != rankquant.dim()
+        || metadata.vector_count != rankquant.len()
+        || metadata_bits != rankquant.bits()
+        || plan.row_identity().row_count() != rankquant.len()
+    {
+        return Err(DenseError::metadata_mismatch(
+            "verified manifest metadata does not match loaded RankQuant",
+        ));
+    }
+
+    // Resolve the sign sidecar under the same policy as `load_verified_bundle`
+    // (Forbid / Require / RequireIfSupported / Any), but freshness-re-check a
+    // loaded sidecar via `read_verified` before mapping it.
+    let sign_aux = plan.auxiliary_by_name(crate::io::SIGN_AUX_NAME);
+    if matches!(load_options.sign, SignLoadPolicy::Forbid) && sign_aux.is_some() {
+        return Err(DenseError::SignSidecarForbidden);
+    }
+    let sign_required = match load_options.sign {
+        SignLoadPolicy::Require => true,
+        SignLoadPolicy::RequireIfSupported => sign_compatible(metadata.dim, metadata_bits),
+        SignLoadPolicy::Forbid | SignLoadPolicy::Any => false,
+    };
+    let sign = match sign_aux {
+        // A `Forbid` policy with a declared sidecar already returned above; any
+        // other policy loads a declared sidecar.
+        Some(aux) if !matches!(load_options.sign, SignLoadPolicy::Forbid) => {
+            // Re-hash the sign sidecar against its recorded digest before load;
+            // on success the artifact had a verified path.
+            aux.read_verified()?;
+            let path = aux.path().expect("read_verified succeeds only with a verified path");
+            let sign = SignBitmap::load(path)?;
+            if sign.dim() != rankquant.dim() || sign.len() != rankquant.len() {
+                return Err(DenseError::metadata_mismatch(format!(
+                    "sign sidecar shape mismatch: sign dim={}, len={} but RankQuant dim={}, len={}",
+                    sign.dim(),
+                    sign.len(),
+                    rankquant.dim(),
+                    rankquant.len()
+                )));
+            }
+            Some(sign)
+        }
+        _ => {
+            if sign_required {
+                return Err(DenseError::MissingSignSidecar);
+            }
+            None
+        }
+    };
+    Ok((rankquant, sign))
+}
+
+/// Re-hash the primary artifact on disk against the digest the plan
+/// recorded at verification time. Streams the file (never buffering it
+/// whole) since the primary can be large; this is cheaper than a full
+/// `verify_for_load`, which also re-parses and re-checks the manifest.
+fn reverify_primary_freshness(path: &Path, expected_sha: Option<&str>) -> Result<(), DenseError> {
+    let expected = expected_sha.ok_or_else(|| {
+        DenseError::metadata_mismatch(
+            "verified plan records no sha256 for the primary RankQuant artifact; \
+             cannot re-check freshness",
+        )
+    })?;
+    let observed = ordvec_manifest::sha256_file(path)?;
+    if !observed.sha256.eq_ignore_ascii_case(expected) {
+        return Err(DenseError::metadata_mismatch(
+            "primary RankQuant artifact changed on disk since the plan was verified \
+             (stale plan reuse)",
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(test)]

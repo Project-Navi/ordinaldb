@@ -21,3 +21,5 @@ ordvec = "0.6.0"
 ordvec-manifest = { version = "0.6.0", default-features = false }
 ordinaldb-hybrid = { path = "../ordinaldb-hybrid", version = "0.2.0", optional = true }
 rayon = "1"
+sha2 = "0.11"
+hex = "0.4"

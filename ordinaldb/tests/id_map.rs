@@ -296,6 +296,35 @@ fn persisted_ids_trailing_bytes_are_rejected_after_manifest_verifies() {
     cleanup(&path);
 }
 
+#[test]
+fn open_from_verified_plan_round_trips_id_search() {
+    use ordinaldb::manifest::{verify_for_load, VerifyOptions};
+    use ordinaldb::DenseLoadOptions;
+
+    let path = temp_bundle("idmap-open-from-plan");
+    cleanup(&path);
+
+    let data = vectors(24, DIM);
+    let query = vectors(2, DIM);
+    let ids: Vec<u64> = (0..24).map(|i| 500 + i as u64).collect();
+    let mut idx = IdMapIndex::new(DIM, 2).unwrap();
+    idx.add_with_ids(&data, &ids).unwrap();
+    let before = idx.search(&query, 8);
+    idx.write(&path).unwrap();
+
+    // Verify the manifest once, then reuse the plan to open the dense side.
+    let plan = verify_for_load(path.join("manifest.json"), VerifyOptions::default()).unwrap();
+    let opened = IdMapIndex::open_from_verified_plan(&plan, DenseLoadOptions::default()).unwrap();
+    let after = opened.search(&query, 8);
+
+    assert_eq!(opened.dim(), DIM);
+    assert_eq!(opened.bits(), 2);
+    assert_eq!(opened.len(), idx.len());
+    assert_eq!(after, before);
+
+    cleanup(&path);
+}
+
 fn rewrite_ids_and_update_manifest(path: &Path, ids: &[u64]) {
     let ids_path = path.join("ids.bin");
     let mut file = fs::File::create(&ids_path).unwrap();

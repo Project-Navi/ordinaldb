@@ -4,9 +4,9 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use ordvec_manifest::VerifyOptions;
+use ordvec_manifest::{VerifiedLoadPlan, VerifyOptions};
 
-use crate::manifest::AuxiliaryArtifactDeclaration;
+use crate::manifest::{AuxiliaryArtifactDeclaration, VerifiedAuxiliaryArtifactExt};
 #[cfg(feature = "hybrid")]
 use crate::ordinal::{validate_query_buffer, validate_single_query_buffer};
 use crate::ordinal::{
@@ -36,6 +36,25 @@ pub struct IdMapSearchReport {
     pub id_mapping: Duration,
     /// Total wall-clock time for the whole call, including ID mapping.
     pub total: Duration,
+}
+
+#[cfg(feature = "hybrid")]
+impl IdMapSearchReport {
+    /// Zip the report's parallel [`scores`](Self::scores)/[`ids`](Self::ids)
+    /// arrays into [`ScoredRow`](crate::hybrid::ScoredRow)s, preserving the
+    /// descending-score order.
+    ///
+    /// [`Self`] carries the score/ID pair as two parallel arrays because it
+    /// also reports the dense timing breakdown; this is the convenience for
+    /// consumers that want both the timings and the `ScoredRow` shape the
+    /// rest of the search API returns, so they need not hand-zip the arrays.
+    pub fn rows(&self) -> Vec<crate::hybrid::ScoredRow> {
+        self.scores
+            .iter()
+            .zip(&self.ids)
+            .map(|(&score, &row_id)| crate::hybrid::ScoredRow { row_id, score })
+            .collect()
+    }
 }
 
 /// A dense [`OrdinalIndex`] plus a bidirectional mapping between
@@ -767,6 +786,48 @@ impl IdMapIndex {
         Ok(Self::from_loaded_parts(inner, ids)?)
     }
 
+    /// Open an ID-mapped bundle from a [`VerifiedLoadPlan`] the caller
+    /// already obtained from [`crate::manifest::verify_for_load`], reusing
+    /// that verification instead of re-verifying the whole manifest.
+    ///
+    /// This is the [`IdMapIndex`] analogue of the sparse
+    /// `Bm25MmapIndex::open_from_verified_plan_unchecked_freshness`, but it
+    /// is *not* unchecked: before loading each artifact it re-hashes the
+    /// bytes on disk against the digest the plan recorded — the primary
+    /// RankQuant and sign sidecar are re-hashed, and the ID sidecar is read
+    /// through [`crate::manifest::VerifiedAuxiliaryArtifactExt::read_verified`]
+    /// and parsed from those verified bytes. A consumer can thus verify a
+    /// bundle once and open both its dense and sparse sides from the single
+    /// plan, without each `open_verified` re-running the full manifest
+    /// verification, while a stale plan over mutable storage is still
+    /// rejected.
+    ///
+    /// # Errors
+    /// Returns [`DenseError::RowIdentity`] if the verified bundle has no ID
+    /// sidecar (it is a bare [`crate::OrdinalIndex`] bundle),
+    /// [`DenseError::MetadataMismatch`] if an artifact changed on disk since
+    /// verification or disagrees with the manifest metadata, or any
+    /// manifest/verification/I/O error from the underlying load.
+    pub fn open_from_verified_plan(
+        plan: &VerifiedLoadPlan,
+        load_options: DenseLoadOptions,
+    ) -> Result<Self, DenseError> {
+        let (rankquant, sign) =
+            crate::ordinal::load_verified_parts_from_plan(plan, load_options)?;
+        let ids_aux = plan
+            .auxiliary_by_name(crate::io::IDS_AUX_NAME)
+            .filter(|aux| aux.path().is_some())
+            .ok_or_else(|| {
+                DenseError::row_identity(
+                    "verified bundle is missing required OrdinalDB ID sidecar",
+                )
+            })?;
+        let ids_bytes = ids_aux.read_verified()?;
+        let ids = crate::io::parse_ids_bytes(&ids_bytes, rankquant.len())?;
+        let inner = OrdinalIndex::from_loaded_parts(rankquant, sign)?;
+        Ok(Self::from_loaded_parts(inner, ids)?)
+    }
+
     /// Summarize the in-memory index's shape (dim, bits, row count, whether
     /// a sign sidecar and ID sidecar are present). `manifest_path`/
     /// `index_path` are always `None`: this describes the index in memory,
@@ -863,6 +924,23 @@ mod tests {
         let (scores, ids) = index.scores_ids_from_results(results).unwrap();
         assert_eq!(scores, vec![1.0, 0.9]);
         assert_eq!(ids, vec![10, 20]);
+    }
+
+    #[test]
+    fn report_rows_zip_scores_and_ids_in_order() {
+        let index = fixture_index();
+        let query = vec![0.125f32; 64];
+        let report = index
+            .search_with_report(&query, 3, DenseSearchOptions::default())
+            .unwrap();
+
+        let rows = report.rows();
+        assert_eq!(rows.len(), report.scores.len());
+        assert_eq!(rows.len(), report.ids.len());
+        for (i, row) in rows.iter().enumerate() {
+            assert_eq!(row.score, report.scores[i]);
+            assert_eq!(row.row_id, report.ids[i]);
+        }
     }
 
     fn fixture_index() -> IdMapIndex {

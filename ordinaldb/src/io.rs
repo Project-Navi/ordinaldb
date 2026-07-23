@@ -715,6 +715,53 @@ pub(crate) fn read_ids_file(path: &Path, expected_len: usize) -> io::Result<Vec<
     Ok(ids)
 }
 
+/// Parse the row-ID sidecar format from an in-memory byte buffer (as
+/// returned by a verified read), applying the same magic, count, size, and
+/// duplicate-ID checks as [`read_ids_file`]. Used by the plan-reuse open
+/// path, where the bytes have already been read and integrity-checked so a
+/// second file read would reopen a TOCTOU.
+pub(crate) fn parse_ids_bytes(bytes: &[u8], expected_len: usize) -> io::Result<Vec<u64>> {
+    let expected = u64::try_from(expected_len).map_err(|_| {
+        invalid_data(format!(
+            "ID sidecar expected row count {expected_len} exceeds u64::MAX"
+        ))
+    })?;
+    let expected_file_size = expected
+        .checked_mul(8)
+        .and_then(|body| body.checked_add(16))
+        .ok_or_else(|| invalid_data("ID sidecar expected file size overflow"))?;
+    let observed_file_size = bytes.len() as u64;
+    if observed_file_size < expected_file_size {
+        return Err(invalid_data("truncated OrdinalDB ID sidecar"));
+    }
+    if observed_file_size > expected_file_size {
+        return Err(invalid_data("trailing bytes in OrdinalDB ID sidecar"));
+    }
+
+    if &bytes[..8] != IDS_MAGIC {
+        return Err(invalid_data("invalid OrdinalDB ID sidecar magic"));
+    }
+    let count = u64::from_le_bytes(bytes[8..16].try_into().expect("16-byte header present"));
+    if count != expected {
+        return Err(invalid_data(format!(
+            "ID sidecar count {count} does not match index len {expected_len}"
+        )));
+    }
+
+    let mut ids = Vec::with_capacity(expected_len);
+    let mut seen = HashSet::with_capacity(expected_len);
+    for chunk in bytes[16..].chunks_exact(8) {
+        let id = u64::from_le_bytes(chunk.try_into().expect("8-byte chunk"));
+        if !seen.insert(id) {
+            return Err(invalid_data(format!(
+                "duplicate ID {id} in persisted ID sidecar"
+            )));
+        }
+        ids.push(id);
+    }
+    Ok(ids)
+}
+
 fn read_u64(reader: &mut impl Read) -> io::Result<u64> {
     let mut bytes = [0u8; 8];
     read_exact_invalid(reader, &mut bytes)?;
