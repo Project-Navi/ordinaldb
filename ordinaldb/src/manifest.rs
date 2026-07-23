@@ -225,6 +225,77 @@ mod tests {
         index.write(path).unwrap();
     }
 
+    /// Recursively read every file in a bundle directory into a sorted map of
+    /// bundle-relative path -> bytes, so two bundles can be compared for
+    /// byte-for-byte equality independent of directory-walk order.
+    fn read_bundle_files(root: &std::path::Path) -> std::collections::BTreeMap<PathBuf, Vec<u8>> {
+        fn walk(
+            dir: &std::path::Path,
+            base: &std::path::Path,
+            out: &mut std::collections::BTreeMap<PathBuf, Vec<u8>>,
+        ) {
+            for entry in std::fs::read_dir(dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    walk(&path, base, out);
+                } else {
+                    let rel = path.strip_prefix(base).unwrap().to_path_buf();
+                    out.insert(rel, std::fs::read(&path).unwrap());
+                }
+            }
+        }
+        let mut out = std::collections::BTreeMap::new();
+        walk(root, root, &mut out);
+        out
+    }
+
+    /// Schema v2's whole point: building a bundle twice from identical inputs
+    /// must produce a byte-identical manifest (no embedded UUIDs/timestamps)
+    /// and, in fact, a byte-identical bundle on disk. Locks in the
+    /// reproducible-build property so a future regression is caught.
+    #[test]
+    fn identical_inputs_produce_byte_identical_bundle() {
+        let bundle_a = temp_bundle("repro-a");
+        let bundle_b = temp_bundle("repro-b");
+        let _ = std::fs::remove_dir_all(&bundle_a);
+        let _ = std::fs::remove_dir_all(&bundle_b);
+
+        // Two independent builds from the same inputs.
+        write_idmap_bundle(&bundle_a);
+        write_idmap_bundle(&bundle_b);
+
+        let files_a = read_bundle_files(&bundle_a);
+        let files_b = read_bundle_files(&bundle_b);
+
+        // The manifest must be byte-identical: schema v2 emits no per-build
+        // UUIDs or timestamps.
+        let manifest_a = files_a
+            .get(std::path::Path::new(crate::artifacts::MANIFEST_FILE))
+            .expect("bundle A has a manifest");
+        let manifest_b = files_b
+            .get(std::path::Path::new(crate::artifacts::MANIFEST_FILE))
+            .expect("bundle B has a manifest");
+        assert_eq!(
+            manifest_a, manifest_b,
+            "manifest.json must be byte-identical across builds from identical inputs"
+        );
+
+        // The whole bundle must be byte-identical: same set of files, each
+        // with identical bytes.
+        assert_eq!(
+            files_a.keys().collect::<Vec<_>>(),
+            files_b.keys().collect::<Vec<_>>(),
+            "both bundles must contain the same set of files"
+        );
+        assert_eq!(
+            files_a, files_b,
+            "the entire .odb bundle must be byte-identical across builds from identical inputs"
+        );
+
+        let _ = std::fs::remove_dir_all(&bundle_a);
+        let _ = std::fs::remove_dir_all(&bundle_b);
+    }
+
     #[test]
     fn read_verified_returns_bytes_then_detects_on_disk_mutation() {
         let bundle = temp_bundle("read-verified");

@@ -11,7 +11,7 @@ repository = "https://github.com/Project-Navi/ordinaldb"
 [dependencies]
 fs4 = "1.1"
 getrandom = "0.4"
-ordvec-manifest = { version = "0.6.0", default-features = false }
+ordvec-manifest = { version = "0.7.0", default-features = false }
 redb = "4"
 serde = "1"
 # float_roundtrip is required for correctness, not a nicety: without it,

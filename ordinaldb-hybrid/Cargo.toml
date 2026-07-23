@@ -11,12 +11,12 @@ repository = "https://github.com/Project-Navi/ordinaldb"
 [dependencies]
 libc = "0.2"
 memmap2 = "0.9"
-ordvec-manifest = { version = "0.6.0", default-features = false }
+ordvec-manifest = { version = "0.7.0", default-features = false }
 serde = { version = "1", features = ["derive"], optional = true }
 serde_json = { version = "1", optional = true }
 
 [dev-dependencies]
-ordvec = "0.6.0"
+ordvec = "0.7.0"
 tempfile = "3"
 
 [features]
