@@ -22,9 +22,9 @@ lto = true
 codegen-units = 1
 opt-level = 3
 
-# Pre-publish only: build the workspace against ordvec main (the perf-train
-# integration PRs are merged; main is the canonical 0.6.0 head). Removed at
-# the ordvec 0.6.0 publish, restoring crates.io version resolution.
+# ordvec is not yet published to crates.io, so the workspace builds against
+# ordvec main (currently 0.7.0 — deterministic manifest schema v2). Remove this
+# patch once ordvec is published, restoring crates.io version resolution.
 [patch.crates-io]
 ordvec = { git = "https://github.com/Project-Navi/ordvec", branch = "main" }
 ordvec-manifest = { git = "https://github.com/Project-Navi/ordvec", branch = "main" }
