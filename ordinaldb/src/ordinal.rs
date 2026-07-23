@@ -1890,10 +1890,12 @@ pub(crate) fn load_verified_ordinal_parts(
 
 /// Load the dense parts (primary RankQuant + optional sign sidecar) from an
 /// already-verified [`VerifiedLoadPlan`], instead of re-running
-/// `verify_for_load`. Before each artifact is loaded its on-disk bytes are
-/// re-hashed against the digest the plan recorded, so reusing a stale plan
-/// over mutable storage is rejected rather than trusted — this is the
-/// freshness re-check that the sparse
+/// `verify_for_load`. Each artifact is read once into memory, re-hashed
+/// against the digest the plan recorded, and constructed from those very
+/// bytes (`load_from_bytes`) — never reopened by path — so the bytes hashed
+/// are the bytes loaded and a stale plan over mutable storage is rejected
+/// rather than trusted, with no mutation window between check and use. This
+/// is the freshness re-check that the sparse
 /// `open_from_verified_plan_unchecked_freshness` deliberately skips.
 pub(crate) fn load_verified_parts_from_plan(
     plan: &VerifiedLoadPlan,
@@ -1936,11 +1938,8 @@ pub(crate) fn load_verified_parts_from_plan(
         )));
     }
 
-    reverify_primary_freshness(
-        plan.artifact_path(),
-        plan.report().artifact.sha256.as_deref(),
-    )?;
-    let rankquant = RankQuant::load(plan.artifact_path())?;
+    let primary_bytes = read_primary_verified(plan)?;
+    let rankquant = RankQuant::load_from_bytes(&primary_bytes)?;
     if metadata.dim != rankquant.dim()
         || metadata.vector_count != rankquant.len()
         || metadata_bits != rankquant.bits()
@@ -1967,11 +1966,12 @@ pub(crate) fn load_verified_parts_from_plan(
         // A `Forbid` policy with a declared sidecar already returned above; any
         // other policy loads a declared sidecar.
         Some(aux) if !matches!(load_options.sign, SignLoadPolicy::Forbid) => {
-            // Re-hash the sign sidecar against its recorded digest before load;
-            // on success the artifact had a verified path.
-            aux.read_verified()?;
-            let path = aux.path().expect("read_verified succeeds only with a verified path");
-            let sign = SignBitmap::load(path)?;
+            // Re-hash the sign sidecar against its recorded digest and load it
+            // from those very bytes — never reopening the path — so the bytes
+            // hashed are the bytes loaded (closes the re-hash-then-reopen
+            // TOCTOU). `read_verified` is itself bounded to the recorded size.
+            let sign_bytes = aux.read_verified()?;
+            let sign = SignBitmap::load_from_bytes(&sign_bytes)?;
             if sign.dim() != rankquant.dim() || sign.len() != rankquant.len() {
                 return Err(DenseError::metadata_mismatch(format!(
                     "sign sidecar shape mismatch: sign dim={}, len={} but RankQuant dim={}, len={}",
@@ -1993,25 +1993,55 @@ pub(crate) fn load_verified_parts_from_plan(
     Ok((rankquant, sign))
 }
 
-/// Re-hash the primary artifact on disk against the digest the plan
-/// recorded at verification time. Streams the file (never buffering it
-/// whole) since the primary can be large; this is cheaper than a full
+/// Read the primary RankQuant artifact from its verified path and re-check
+/// the bytes against the SHA-256 and size the plan recorded at verification
+/// time, returning the bytes only on an exact match. The hash is computed
+/// over the single in-memory read, so the caller can construct the index
+/// from these very bytes via `RankQuant::load_from_bytes` — the bytes hashed
+/// are the bytes loaded, closing the re-hash-then-reopen TOCTOU that a
+/// separate hash-then-`RankQuant::load(path)` left open. The read is bounded
+/// to `recorded_size + 1` bytes so a post-verification swap to a huge file is
+/// rejected by size before it can exhaust memory. Cheaper than a full
 /// `verify_for_load`, which also re-parses and re-checks the manifest.
-fn reverify_primary_freshness(path: &Path, expected_sha: Option<&str>) -> Result<(), DenseError> {
-    let expected = expected_sha.ok_or_else(|| {
+fn read_primary_verified(plan: &VerifiedLoadPlan) -> Result<Vec<u8>, DenseError> {
+    use sha2::{Digest, Sha256};
+    use std::io::Read;
+
+    let path = plan.artifact_path();
+    let expected_sha = plan.report().artifact.sha256.as_deref().ok_or_else(|| {
         DenseError::metadata_mismatch(
             "verified plan records no sha256 for the primary RankQuant artifact; \
              cannot re-check freshness",
         )
     })?;
-    let observed = ordvec_manifest::sha256_file(path)?;
-    if !observed.sha256.eq_ignore_ascii_case(expected) {
+    // `artifact.size_bytes` is the manifest-recorded, verification-checked
+    // size; `metadata.file_size_bytes` is the always-present fallback. Either
+    // came from a manifest that already passed size-bounded verification, so
+    // both are trusted bounds.
+    let recorded_size = plan
+        .report()
+        .artifact
+        .size_bytes
+        .unwrap_or_else(|| plan.metadata().file_size_bytes);
+
+    let file = std::fs::File::open(path)?;
+    let mut bytes = Vec::new();
+    file.take(recorded_size.saturating_add(1))
+        .read_to_end(&mut bytes)?;
+    if bytes.len() as u64 != recorded_size {
         return Err(DenseError::metadata_mismatch(
             "primary RankQuant artifact changed on disk since the plan was verified \
              (stale plan reuse)",
         ));
     }
-    Ok(())
+    let digest = hex::encode(Sha256::digest(&bytes));
+    if !digest.eq_ignore_ascii_case(expected_sha) {
+        return Err(DenseError::metadata_mismatch(
+            "primary RankQuant artifact changed on disk since the plan was verified \
+             (stale plan reuse)",
+        ));
+    }
+    Ok(bytes)
 }
 
 #[cfg(test)]

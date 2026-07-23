@@ -325,6 +325,90 @@ fn open_from_verified_plan_round_trips_id_search() {
     cleanup(&path);
 }
 
+// Freshness regression tests for `open_from_verified_plan`. These corrupt an
+// artifact on disk *after* verification and assert the load rejects it,
+// proving the artifacts are read and re-hashed at load time (not trusted from
+// the stale plan). They cannot deterministically reproduce a true
+// concurrent-swap race between the hash and the load — that needs a
+// filesystem hook — but the fix constructs each index from the very bytes it
+// hashed (`load_from_bytes`, no reopen-by-path), so no such window exists to
+// exercise. This mirrors how the crate documents the mmap byte-pinning
+// non-guarantee: the invariant is closed by construction, and these tests pin
+// the read-and-hash-at-load-time behavior.
+#[test]
+fn open_from_verified_plan_rejects_primary_mutated_after_verification() {
+    use ordinaldb::manifest::{verify_for_load, VerifyOptions};
+    use ordinaldb::DenseLoadOptions;
+
+    let path = temp_bundle("idmap-plan-primary-mutation");
+    cleanup(&path);
+
+    let data = vectors(24, DIM);
+    let ids: Vec<u64> = (0..24).map(|i| 700 + i as u64).collect();
+    let mut idx = IdMapIndex::new(DIM, 2).unwrap();
+    idx.add_with_ids(&data, &ids).unwrap();
+    idx.write(&path).unwrap();
+
+    let plan = verify_for_load(path.join("manifest.json"), VerifyOptions::default()).unwrap();
+
+    // Flip a byte in the primary artifact, preserving its length so the
+    // SHA-256 re-check (not the size check) is what rejects it.
+    let primary = path.join("index.ovrq");
+    let mut bytes = fs::read(&primary).unwrap();
+    let last = bytes.len() - 1;
+    bytes[last] ^= 0xFF;
+    fs::write(&primary, &bytes).unwrap();
+
+    let err = IdMapIndex::open_from_verified_plan(&plan, DenseLoadOptions::default())
+        .err()
+        .expect("mutated primary must be rejected");
+    let message = err.to_string().to_lowercase();
+    assert!(
+        message.contains("stale") || message.contains("changed") || message.contains("sha"),
+        "unexpected error: {err}"
+    );
+
+    cleanup(&path);
+}
+
+#[test]
+fn open_from_verified_plan_rejects_sign_mutated_after_verification() {
+    use ordinaldb::manifest::{verify_for_load, VerifyOptions};
+    use ordinaldb::DenseLoadOptions;
+
+    let path = temp_bundle("idmap-plan-sign-mutation");
+    cleanup(&path);
+
+    // dim=64, bits=2 is sign-compatible, so a default build writes sign.ovsb.
+    let data = vectors(24, DIM);
+    let ids: Vec<u64> = (0..24).map(|i| 800 + i as u64).collect();
+    let mut idx = IdMapIndex::new(DIM, 2).unwrap();
+    idx.add_with_ids(&data, &ids).unwrap();
+    idx.write(&path).unwrap();
+
+    let sign = path.join("sign.ovsb");
+    assert!(sign.exists(), "sign-compatible bundle must write a sign sidecar");
+
+    let plan = verify_for_load(path.join("manifest.json"), VerifyOptions::default()).unwrap();
+
+    // Corrupt the sign sidecar after verification, length preserved.
+    let mut bytes = fs::read(&sign).unwrap();
+    let last = bytes.len() - 1;
+    bytes[last] ^= 0xFF;
+    fs::write(&sign, &bytes).unwrap();
+
+    let err = IdMapIndex::open_from_verified_plan(&plan, DenseLoadOptions::default())
+        .err()
+        .expect("mutated sign sidecar must be rejected");
+    let message = err.to_string().to_lowercase();
+    assert!(
+        message.contains("sha") || message.contains("verif") || message.contains("changed"),
+        "unexpected error: {err}"
+    );
+
+    cleanup(&path);
+}
+
 fn rewrite_ids_and_update_manifest(path: &Path, ids: &[u64]) {
     let ids_path = path.join("ids.bin");
     let mut file = fs::File::create(&ids_path).unwrap();
